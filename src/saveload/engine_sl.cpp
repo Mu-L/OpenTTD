@@ -15,7 +15,6 @@
 #include "saveload_internal.h"
 #include "../engine_base.h"
 #include "../string_func.h"
-#include <vector>
 
 #include "../safeguards.h"
 
@@ -49,9 +48,9 @@ static std::vector<Engine*> _temp_engine;
  * The allocated Engine must be freed using FreeEngine;
  * @return Allocated engine.
  */
-static Engine* CallocEngine()
+static Engine *CallocEngine()
 {
-	uint8 *zero = CallocT<uint8>(sizeof(Engine));
+	uint8_t *zero = CallocT<uint8_t>(sizeof(Engine));
 	Engine *engine = new (zero) Engine();
 	return engine;
 }
@@ -108,9 +107,9 @@ struct ENGNChunkHandler : ChunkHandler {
 			if (IsSavegameVersionBefore(SLV_179)) {
 				/* preview_company_rank was replaced with preview_company and preview_asked.
 				 * Just cancel any previews. */
-				e->flags &= ~4; // ENGINE_OFFER_WINDOW_OPEN
+				e->flags.Reset(EngineFlag{4}); // ENGINE_OFFER_WINDOW_OPEN
 				e->preview_company = INVALID_COMPANY;
-				e->preview_asked = (CompanyMask)-1;
+				e->preview_asked = std::numeric_limits<CompanyMask>::max();
 			}
 		}
 	}
@@ -190,11 +189,25 @@ struct EIDSChunkHandler : ChunkHandler {
 	{
 		SlTableHeader(_engine_id_mapping_desc);
 
-		uint index = 0;
-		for (EngineIDMapping &eid : _engine_mngr) {
-			SlSetArrayIndex(index);
+		/* Count total entries needed for combined list. */
+		size_t total = 0;
+		for (const auto &mapping : _engine_mngr.mappings) {
+			total += std::size(mapping);
+		}
+
+		/* Combine per-type mappings into single list for all types. */
+		std::vector<EngineIDMapping> temp;
+		temp.reserve(total);
+		for (const auto &mapping : _engine_mngr.mappings) {
+			temp.insert(std::end(temp), std::begin(mapping), std::end(mapping));
+		}
+
+		/* Sort combined list by EngineID */
+		std::ranges::sort(temp, std::less{}, &EngineIDMapping::engine);
+
+		for (EngineIDMapping &eid : temp) {
+			SlSetArrayIndex(eid.engine);
 			SlObject(&eid, _engine_id_mapping_desc);
-			index++;
 		}
 	}
 
@@ -202,11 +215,13 @@ struct EIDSChunkHandler : ChunkHandler {
 	{
 		const std::vector<SaveLoad> slt = SlCompatTableHeader(_engine_id_mapping_desc, _engine_id_mapping_sl_compat);
 
-		_engine_mngr.clear();
+		_engine_mngr.mappings = {};
 
-		while (SlIterateArray() != -1) {
-			EngineIDMapping *eid = &_engine_mngr.emplace_back();
-			SlObject(eid, slt);
+		int index;
+		while ((index = SlIterateArray()) != -1) {
+			EngineIDMapping eid;
+			SlObject(&eid, slt);
+			_engine_mngr.SetID(eid.type, eid.internal_id, eid.grfid, eid.substitute_id, index);
 		}
 	}
 };

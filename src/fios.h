@@ -13,17 +13,19 @@
 #include "gfx_type.h"
 #include "company_base.h"
 #include "newgrf_config.h"
+#include "gamelog.h"
 #include "network/core/tcp_content_type.h"
+#include "timer/timer_game_calendar.h"
 
 
 /** Special values for save-load window for the data parameter of #InvalidateWindowData. */
-enum SaveLoadInvalidateWindowData {
+enum SaveLoadInvalidateWindowData : uint8_t {
 	SLIWD_RESCAN_FILES,          ///< Rescan all files (when changed directory, ...)
 	SLIWD_SELECTION_CHANGES,     ///< File selection has changed (user click, ...)
 	SLIWD_FILTER_CHANGES,        ///< The filename filter has changed (via the editbox)
 };
 
-typedef SmallMap<uint, CompanyProperties *> CompanyPropertiesMap;
+using CompanyPropertiesMap = std::map<uint, std::unique_ptr<CompanyProperties>>;
 
 /**
  * Container for loading in mode SL_LOAD_CHECK.
@@ -31,33 +33,22 @@ typedef SmallMap<uint, CompanyProperties *> CompanyPropertiesMap;
 struct LoadCheckData {
 	bool checkable;     ///< True if the savegame could be checked by SL_LOAD_CHECK. (Old savegames are not checkable.)
 	StringID error;     ///< Error message from loading. INVALID_STRING_ID if no error.
-	char *error_data;   ///< Data to pass to SetDParamStr when displaying #error.
+	std::string error_msg; ///< Data to pass to SetDParamStr when displaying #error.
 
-	uint32 map_size_x, map_size_y;
-	Date current_date;
+	uint32_t map_size_x, map_size_y;
+	TimerGameCalendar::Date current_date;
 
 	GameSettings settings;
 
 	CompanyPropertiesMap companies;               ///< Company information.
 
-	GRFConfig *grfconfig;                         ///< NewGrf configuration from save.
+	GRFConfigList grfconfig;                      ///< NewGrf configuration from save.
 	GRFListCompatibility grf_compatibility;       ///< Summary state of NewGrfs, whether missing files or only compatible found.
 
-	struct LoggedAction *gamelog_action;          ///< Gamelog actions
-	uint gamelog_actions;                         ///< Number of gamelog actions
+	Gamelog gamelog; ///< Gamelog actions
 
-	LoadCheckData() : error_data(nullptr), grfconfig(nullptr),
-			grf_compatibility(GLC_NOT_FOUND), gamelog_action(nullptr), gamelog_actions(0)
+	LoadCheckData() : grf_compatibility(GLC_NOT_FOUND)
 	{
-		this->Clear();
-	}
-
-	/**
-	 * Don't leak memory at program exit
-	 */
-	~LoadCheckData()
-	{
-		this->Clear();
 	}
 
 	/**
@@ -75,7 +66,7 @@ struct LoadCheckData {
 	 */
 	bool HasNewGrfs()
 	{
-		return this->checkable && this->error == INVALID_STRING_ID && this->grfconfig != nullptr;
+		return this->checkable && this->error == INVALID_STRING_ID && !this->grfconfig.empty();
 	}
 
 	void Clear();
@@ -86,20 +77,20 @@ extern LoadCheckData _load_check_data;
 /** Deals with finding savegames */
 struct FiosItem {
 	FiosType type;
-	uint64 mtime;
-	char title[64];
-	char name[MAX_PATH];
+	int64_t mtime;
+	std::string title;
+	std::string name;
 	bool operator< (const FiosItem &other) const;
 };
 
 /** List of file information. */
 class FileList : public std::vector<FiosItem> {
 public:
-	void BuildFileList(AbstractFileType abstract_filetype, SaveLoadOperation fop);
-	const FiosItem *FindItem(const char *file);
+	void BuildFileList(AbstractFileType abstract_filetype, SaveLoadOperation fop, bool show_dirs);
+	const FiosItem *FindItem(const std::string_view file);
 };
 
-enum SortingBits {
+enum SortingBits : uint8_t {
 	SORT_ASCENDING  = 0,
 	SORT_DESCENDING = 1,
 	SORT_BY_DATE    = 0,
@@ -112,18 +103,25 @@ extern SortingBits _savegame_sort_order;
 
 void ShowSaveLoadDialog(AbstractFileType abstract_filetype, SaveLoadOperation fop);
 
-void FiosGetSavegameList(SaveLoadOperation fop, FileList &file_list);
-void FiosGetScenarioList(SaveLoadOperation fop, FileList &file_list);
-void FiosGetHeightmapList(SaveLoadOperation fop, FileList &file_list);
+void FiosGetSavegameList(SaveLoadOperation fop, bool show_dirs, FileList &file_list);
+void FiosGetScenarioList(SaveLoadOperation fop, bool show_dirs, FileList &file_list);
+void FiosGetHeightmapList(SaveLoadOperation fop, bool show_dirs, FileList &file_list);
+void FiosGetTownDataList(SaveLoadOperation fop, bool show_dirs, FileList &file_list);
 
-const char *FiosBrowseTo(const FiosItem *item);
+bool FiosBrowseTo(const FiosItem *item);
 
-StringID FiosGetDescText(const char **path, uint64 *total_free);
+std::string FiosGetCurrentPath();
+std::optional<uint64_t> FiosGetDiskFreeSpace(const std::string &path);
 bool FiosDelete(const char *name);
 std::string FiosMakeHeightmapName(const char *name);
 std::string FiosMakeSavegameName(const char *name);
 
-FiosType FiosGetSavegameListCallback(SaveLoadOperation fop, const std::string &file, const char *ext, char *title, const char *last);
+std::tuple<FiosType, std::string> FiosGetSavegameListCallback(SaveLoadOperation fop, const std::string &file, const std::string_view ext);
+std::tuple<FiosType, std::string> FiosGetScenarioListCallback(SaveLoadOperation fop, const std::string &file, const std::string_view ext);
+std::tuple<FiosType, std::string> FiosGetHeightmapListCallback(SaveLoadOperation fop, const std::string &file, const std::string_view ext);
+
+void ScanScenarios();
+const char *FindScenario(const ContentInfo *ci, bool md5sum);
 
 /**
  * A savegame name automatically numbered.

@@ -23,24 +23,56 @@ install(TARGETS openttd
             COMPONENT Runtime
         )
 
-install(DIRECTORY
-                ${CMAKE_BINARY_DIR}/lang
-                ${CMAKE_BINARY_DIR}/baseset
-                ${CMAKE_BINARY_DIR}/ai
-                ${CMAKE_BINARY_DIR}/game
-                ${CMAKE_SOURCE_DIR}/bin/scripts
-        DESTINATION ${DATA_DESTINATION_DIR}
-        COMPONENT language_files
-        REGEX "ai/[^\.]+$" EXCLUDE # Ignore subdirs in ai dir
-)
+if (NOT EMSCRIPTEN)
+    # Emscripten embeds these files in openttd.data.
+    # See CMakeLists.txt in the root.
+    install(DIRECTORY
+                    ${CMAKE_BINARY_DIR}/lang
+                    ${CMAKE_BINARY_DIR}/baseset
+                    ${CMAKE_BINARY_DIR}/ai
+                    ${CMAKE_BINARY_DIR}/game
+                    ${CMAKE_SOURCE_DIR}/bin/scripts
+            DESTINATION ${DATA_DESTINATION_DIR}
+            COMPONENT language_files
+            REGEX "ai/[^\.]+$" EXCLUDE # Ignore subdirs in ai dir
+    )
+else()
+    install(FILES
+                ${CMAKE_BINARY_DIR}/openttd.js
+                ${CMAKE_BINARY_DIR}/openttd.wasm
+                ${CMAKE_BINARY_DIR}/openttd.data
+            DESTINATION ${BINARY_DESTINATION_DIR}
+            COMPONENT Runtime
+    )
+endif()
 
 install(FILES
                 ${CMAKE_SOURCE_DIR}/COPYING.md
                 ${CMAKE_SOURCE_DIR}/README.md
-                ${CMAKE_SOURCE_DIR}/changelog.txt
-                ${CMAKE_SOURCE_DIR}/docs/multiplayer.md
-                ${CMAKE_SOURCE_DIR}/known-bugs.txt
+                ${CMAKE_SOURCE_DIR}/CREDITS.md
+                ${CMAKE_SOURCE_DIR}/CONTRIBUTING.md
+                ${CMAKE_SOURCE_DIR}/changelog.md
+                ${CMAKE_SOURCE_DIR}/known-bugs.md
         DESTINATION ${DOCS_DESTINATION_DIR}
+        COMPONENT docs)
+
+install(FILES
+                ${CMAKE_SOURCE_DIR}/docs/admin_network.md
+                ${CMAKE_SOURCE_DIR}/docs/debugging_desyncs.md
+                ${CMAKE_SOURCE_DIR}/docs/desync.md
+                ${CMAKE_SOURCE_DIR}/docs/directory_structure.md
+                ${CMAKE_SOURCE_DIR}/docs/eints.md
+                ${CMAKE_SOURCE_DIR}/docs/fonts.md
+                ${CMAKE_SOURCE_DIR}/docs/game_coordinator.md
+                ${CMAKE_SOURCE_DIR}/docs/linkgraph.md
+                ${CMAKE_SOURCE_DIR}/docs/logging_and_performance_metrics.md
+                ${CMAKE_SOURCE_DIR}/docs/multiplayer.md
+                ${CMAKE_SOURCE_DIR}/docs/savegame_format.md
+                ${CMAKE_SOURCE_DIR}/docs/symbol_server.md
+                ${CMAKE_SOURCE_DIR}/docs/obg_format.txt
+                ${CMAKE_SOURCE_DIR}/docs/obm_format.txt
+                ${CMAKE_SOURCE_DIR}/docs/obs_format.txt
+        DESTINATION ${DOCS_DESTINATION_DIR}/docs
         COMPONENT docs)
 
 # A Linux manual only makes sense when using FHS. Otherwise it is a very odd
@@ -60,7 +92,7 @@ if(OPTION_INSTALL_FHS)
             COMPONENT manual)
 endif()
 
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
     install(DIRECTORY
                     ${CMAKE_BINARY_DIR}/media/icons
                     ${CMAKE_BINARY_DIR}/media/pixmaps
@@ -122,6 +154,8 @@ set(CPACK_STRIP_FILES YES)
 set(CPACK_OUTPUT_FILE_PREFIX "bundles")
 
 if(APPLE)
+    # Stripping would produce unreadable stacktraces.
+    set(CPACK_STRIP_FILES NO)
     set(CPACK_GENERATOR "Bundle")
     include(PackageBundle)
 
@@ -129,7 +163,7 @@ if(APPLE)
         set(CPACK_PACKAGE_FILE_NAME "openttd-#CPACK_PACKAGE_VERSION#-macos-universal")
     else()
         set(CPACK_PACKAGE_FILE_NAME "openttd-#CPACK_PACKAGE_VERSION#-macos-${CPACK_SYSTEM_NAME}")
-	endif()
+    endif()
 elseif(WIN32)
     set(CPACK_GENERATOR "ZIP")
     if(OPTION_USE_NSIS)
@@ -139,10 +173,10 @@ elseif(WIN32)
 
     set(CPACK_PACKAGE_FILE_NAME "openttd-#CPACK_PACKAGE_VERSION#-windows-${CPACK_SYSTEM_NAME}")
 
-    if(WINDOWS_CERTIFICATE_COMMON_NAME)
+    if(DEFINED ENV{AZURE_CODESIGN_PROFILE_NAME})
       add_custom_command(TARGET openttd
         POST_BUILD
-        COMMAND "${CMAKE_SOURCE_DIR}/os/windows/sign.bat" "$<TARGET_FILE:openttd>" "${WINDOWS_CERTIFICATE_COMMON_NAME}"
+        COMMAND "${CMAKE_SOURCE_DIR}/os/windows/sign.bat" "${BINARY_DESTINATION_DIR}"
       )
     endif()
 elseif(UNIX)
@@ -162,7 +196,7 @@ elseif(UNIX)
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
         if(LSB_RELEASE_ID)
-            if(LSB_RELEASE_ID STREQUAL "Ubuntu" OR LSB_RELEASE_ID STREQUAL "Debian")
+            if(LSB_RELEASE_ID STREQUAL "Ubuntu" OR LSB_RELEASE_ID STREQUAL "Debian" OR LSB_RELEASE_ID STREQUAL "Linuxmint")
                 execute_process(COMMAND ${LSB_RELEASE_EXEC} -cs
                     OUTPUT_VARIABLE LSB_RELEASE_CODENAME
                     OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -171,6 +205,10 @@ elseif(UNIX)
 
                 set(CPACK_GENERATOR "DEB")
                 include(PackageDeb)
+            elseif(LSB_RELEASE_ID STREQUAL "Fedora")
+                set(PLATFORM "fedora")
+                set(CPACK_GENERATOR "RPM")
+                include(PackageRPM)
             else()
                 set(UNSUPPORTED_PLATFORM_NAME "LSB-based Linux distribution '${LSB_RELEASE_ID}'")
             endif()
@@ -181,6 +219,10 @@ elseif(UNIX)
             if(DISTRO_ID STREQUAL "arch")
                 set(PLATFORM "arch")
                 set(CPACK_GENERATOR "TXZ")
+            elseif(DISTRO_ID STREQUAL "fedora" OR DISTRO_ID STREQUAL "rhel")
+                set(PLATFORM "fedora")
+                set(CPACK_GENERATOR "RPM")
+                include(PackageRPM)
             else()
                 set(UNSUPPORTED_PLATFORM_NAME "Linux distribution '${DISTRO_ID}' from /etc/os-release")
             endif()

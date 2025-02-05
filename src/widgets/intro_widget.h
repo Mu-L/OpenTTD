@@ -11,7 +11,7 @@
 #define WIDGETS_INTRO_WIDGET_H
 
 /** Widgets of the #SelectGameWindow class. */
-enum SelectGameIntroWidgets {
+enum SelectGameIntroWidgets : WidgetID {
 	WID_SGI_GENERATE_GAME,         ///< Generate game button.
 	WID_SGI_LOAD_GAME,             ///< Load game button.
 	WID_SGI_PLAY_SCENARIO,         ///< Play scenario button.
@@ -28,10 +28,12 @@ enum SelectGameIntroWidgets {
 	WID_SGI_TRANSLATION,           ///< Translation errors.
 	WID_SGI_OPTIONS,               ///< Options button.
 	WID_SGI_HIGHSCORE,             ///< Highscore button.
+	WID_SGI_HELP,                  ///< Help and manuals button.
 	WID_SGI_SETTINGS_OPTIONS,      ///< Settings button.
 	WID_SGI_GRF_SETTINGS,          ///< NewGRF button.
 	WID_SGI_CONTENT_DOWNLOAD,      ///< Content Download button.
 	WID_SGI_AI_SETTINGS,           ///< AI button.
+	WID_SGI_GS_SETTINGS,           ///< Game Script button.
 	WID_SGI_EXIT,                  ///< Exit button.
 };
 

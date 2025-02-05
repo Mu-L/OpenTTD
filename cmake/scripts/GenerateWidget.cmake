@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
 #
 # CMake script to automatically generate the enums in script_window.hpp
@@ -13,6 +13,7 @@ cmake_minimum_required(VERSION 3.5)
 # The parameter "enumname" specifies the enumeration to extract. This can also be a regular expression.
 # The parameter "filename" specifies the relative path to the file, where the enumeration is extracted from. This can also be a glob expression.
 #
+# All files where enumerations are extracted from are automatically added via #include
 #
 
 if(NOT GENERATE_SOURCE_FILE)
@@ -41,6 +42,7 @@ foreach(ENUM IN LISTS ENUM_LINES)
 
         string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "" FILE ${FILE})
         string(APPEND ${PLACE_HOLDER} "\n${ADD_INDENT}/* automatically generated from ${FILE} */")
+        list(APPEND INCLUDES "#include \"${FILE}\"")
 
         foreach(LINE IN LISTS SOURCE_LINES)
             string(REPLACE "${RM_INDENT}" "" LINE "${LINE}")
@@ -54,10 +56,13 @@ foreach(ENUM IN LISTS ENUM_LINES)
             endif()
 
             # Check for enum match
-            if("${LINE}" MATCHES "^	*enum *${ENUM_PATTERN} *\{")
+            if("${LINE}" MATCHES "^	*enum *${ENUM_PATTERN}( *: *[^ ]*)? *\{")
                 # REGEX REPLACE does a REGEX MATCHALL and fails if an empty string is matched
                 string(REGEX MATCH "[^	]*" RESULT "${LINE}")
                 string(REPLACE "${RESULT}" "" RM_INDENT "${LINE}")
+
+                string(REGEX MATCH " *: *[^ ]*" RESULT "${LINE}")
+                string(REPLACE "${RESULT}" "" LINE "${LINE}")
 
                 set(ACTIVE 1)
                 if(ACTIVE_COMMENT GREATER 0)
@@ -115,5 +120,8 @@ foreach(ENUM IN LISTS ENUM_LINES)
          endforeach()
     endforeach()
  endforeach()
+
+ list(REMOVE_DUPLICATES INCLUDES)
+ string(REPLACE ";" "\n" INCLUDES "${INCLUDES}")
 
 configure_file(${GENERATE_SOURCE_FILE} ${GENERATE_BINARY_FILE})

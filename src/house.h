@@ -11,51 +11,47 @@
 #define HOUSE_H
 
 #include "cargo_type.h"
-#include "date_type.h"
+#include "timer/timer_game_calendar.h"
 #include "house_type.h"
 #include "newgrf_animation_type.h"
+#include "newgrf_callbacks.h"
 #include "newgrf_commons.h"
 
 /**
  * Simple value that indicates the house has reached the final stage of
  * construction.
  */
-static const byte TOWN_HOUSE_COMPLETED = 3;
-
-static const HouseID NUM_HOUSES_PER_GRF = 255;    ///< Number of supported houses per NewGRF; limited to 255 to allow extending Action3 with an extended byte later on.
+static const uint8_t TOWN_HOUSE_COMPLETED = 3;
 
 static const uint HOUSE_NO_CLASS      = 0;
-static const HouseID NEW_HOUSE_OFFSET = 110;    ///< Offset for new houses.
-static const HouseID NUM_HOUSES       = 512;    ///< Total number of houses.
-static const HouseID INVALID_HOUSE_ID = 0xFFFF;
+static const HouseID NEW_HOUSE_OFFSET = 110; ///< Offset for new houses.
+static const HouseID NUM_HOUSES       = 4096; ///< Total number of houses.
+static const HouseID INVALID_HOUSE_ID = UINT16_MAX;
+
+static const HouseID NUM_HOUSES_PER_GRF = NUM_HOUSES; ///< Number of supported houses per NewGRF.
 
 static const uint HOUSE_NUM_ACCEPTS = 16; ///< Max number of cargoes accepted by a tile
+static const uint HOUSE_ORIGINAL_NUM_ACCEPTS = 3; ///< Original number of accepted cargo types.
 
-/**
- * There can only be as many classes as there are new houses, plus one for
- * NO_CLASS, as the original houses don't have classes.
- */
-static const uint HOUSE_CLASS_MAX  = NUM_HOUSES - NEW_HOUSE_OFFSET + 1;
-
-enum BuildingFlags {
-	TILE_NO_FLAG         =       0,
-	TILE_SIZE_1x1        = 1U << 0,
-	TILE_NOT_SLOPED      = 1U << 1,
-	TILE_SIZE_2x1        = 1U << 2,
-	TILE_SIZE_1x2        = 1U << 3,
-	TILE_SIZE_2x2        = 1U << 4,
-	BUILDING_IS_ANIMATED = 1U << 5,
-	BUILDING_IS_CHURCH   = 1U << 6,
-	BUILDING_IS_STADIUM  = 1U << 7,
-	BUILDING_HAS_1_TILE  = TILE_SIZE_1x1 | TILE_SIZE_2x1 | TILE_SIZE_1x2 | TILE_SIZE_2x2,
-	BUILDING_HAS_2_TILES = TILE_SIZE_2x1 | TILE_SIZE_1x2 | TILE_SIZE_2x2,
-	BUILDING_2_TILES_X   = TILE_SIZE_2x1 | TILE_SIZE_2x2,
-	BUILDING_2_TILES_Y   = TILE_SIZE_1x2 | TILE_SIZE_2x2,
-	BUILDING_HAS_4_TILES = TILE_SIZE_2x2,
+enum class BuildingFlag : uint8_t {
+	Size1x1    = 0,
+	NotSloped  = 1,
+	Size2x1    = 2,
+	Size1x2    = 3,
+	Size2x2    = 4,
+	IsAnimated = 5,
+	IsChurch   = 6,
+	IsStadium  = 7,
 };
-DECLARE_ENUM_AS_BIT_SET(BuildingFlags)
+using BuildingFlags = EnumBitSet<BuildingFlag, uint8_t>;
 
-enum HouseZonesBits {
+static constexpr BuildingFlags BUILDING_HAS_1_TILE  = {BuildingFlag::Size1x1, BuildingFlag::Size2x1, BuildingFlag::Size1x2, BuildingFlag::Size2x2};
+static constexpr BuildingFlags BUILDING_HAS_2_TILES = {BuildingFlag::Size2x1, BuildingFlag::Size1x2, BuildingFlag::Size2x2};
+static constexpr BuildingFlags BUILDING_2_TILES_X   = {BuildingFlag::Size2x1, BuildingFlag::Size2x2};
+static constexpr BuildingFlags BUILDING_2_TILES_Y   = {BuildingFlag::Size1x2, BuildingFlag::Size2x2};
+static constexpr BuildingFlags BUILDING_HAS_4_TILES = {BuildingFlag::Size2x2};
+
+enum HouseZonesBits : uint8_t {
 	HZB_BEGIN     = 0,
 	HZB_TOWN_EDGE = 0,
 	HZB_TOWN_OUTSKIRT,
@@ -66,9 +62,9 @@ enum HouseZonesBits {
 };
 static_assert(HZB_END == 5);
 
-DECLARE_POSTFIX_INCREMENT(HouseZonesBits)
+DECLARE_INCREMENT_DECREMENT_OPERATORS(HouseZonesBits)
 
-enum HouseZones {                  ///< Bit  Value       Meaning
+enum HouseZones : uint16_t {
 	HZ_NOZNS             = 0x0000,  ///<       0          This is just to get rid of zeros, meaning none
 	HZ_ZON1              = 1U << HZB_TOWN_EDGE,    ///< 0..4 1,2,4,8,10  which town zones the building can be built in, Zone1 been the further suburb
 	HZ_ZON2              = 1U << HZB_TOWN_OUTSKIRT,
@@ -85,51 +81,48 @@ enum HouseZones {                  ///< Bit  Value       Meaning
 };
 DECLARE_ENUM_AS_BIT_SET(HouseZones)
 
-enum HouseExtraFlags {
-	NO_EXTRA_FLAG            =       0,
-	BUILDING_IS_HISTORICAL   = 1U << 0,  ///< this house will only appear during town generation in random games, thus the historical
-	BUILDING_IS_PROTECTED    = 1U << 1,  ///< towns and AI will not remove this house, while human players will be able to
-	SYNCHRONISED_CALLBACK_1B = 1U << 2,  ///< synchronized callback 1B will be performed, on multi tile houses
-	CALLBACK_1A_RANDOM_BITS  = 1U << 3,  ///< callback 1A needs random bits
+enum class HouseExtraFlag : uint8_t {
+	BuildingIsHistorical   = 0, ///< this house will only appear during town generation in random games, thus the historical
+	BuildingIsProtected    = 1, ///< towns and AI will not remove this house, while human players will be able to
+	SynchronisedCallback1B = 2, ///< synchronized callback 1B will be performed, on multi tile houses
+	Callback1ARandomBits   = 3, ///< callback 1A needs random bits
 };
-
-DECLARE_ENUM_AS_BIT_SET(HouseExtraFlags)
+using HouseExtraFlags = EnumBitSet<HouseExtraFlag, uint8_t>;
 
 struct HouseSpec {
 	/* Standard properties */
-	Year min_year;                            ///< introduction year of the house
-	Year max_year;                            ///< last year it can be built
-	byte population;                          ///< population (Zero on other tiles in multi tile house.)
-	byte removal_cost;                        ///< cost multiplier for removing it
+	TimerGameCalendar::Year min_year;         ///< introduction year of the house
+	TimerGameCalendar::Year max_year;         ///< last year it can be built
+	uint8_t population;                          ///< population (Zero on other tiles in multi tile house.)
+	uint8_t removal_cost;                        ///< cost multiplier for removing it
 	StringID building_name;                   ///< building name
-	uint16 remove_rating_decrease;            ///< rating decrease if removed
-	byte mail_generation;                     ///< mail generation multiplier (tile based, as the acceptances below)
-	byte cargo_acceptance[HOUSE_NUM_ACCEPTS]; ///< acceptance level for the cargo slots
-	CargoID accepts_cargo[HOUSE_NUM_ACCEPTS]; ///< input cargo slots
+	uint16_t remove_rating_decrease;            ///< rating decrease if removed
+	uint8_t mail_generation;                     ///< mail generation multiplier (tile based, as the acceptances below)
+	uint8_t cargo_acceptance[HOUSE_NUM_ACCEPTS]; ///< acceptance level for the cargo slots
+	CargoType accepts_cargo[HOUSE_NUM_ACCEPTS]; ///< input cargo slots
 	BuildingFlags building_flags;             ///< some flags that describe the house (size, stadium etc...)
 	HouseZones building_availability;         ///< where can it be built (climates, zones)
 	bool enabled;                             ///< the house is available to build (true by default, but can be disabled by newgrf)
 
 	/* NewHouses properties */
 	GRFFileProps grf_prop;                    ///< Properties related the the grf file
-	uint16 callback_mask;                     ///< Bitmask of house callbacks that have to be called
-	byte random_colour[4];                    ///< 4 "random" colours
-	byte probability;                         ///< Relative probability of appearing (16 is the standard value)
-	HouseExtraFlags extra_flags;              ///< some more flags
+	HouseCallbackMasks callback_mask;                     ///< Bitmask of house callbacks that have to be called
+	Colours random_colour[4];                 ///< 4 "random" colours
+	uint8_t probability;                         ///< Relative probability of appearing (16 is the standard value)
+	HouseExtraFlags extra_flags{};              ///< some more flags
 	HouseClassID class_id;                    ///< defines the class this house has (not grf file based)
 	AnimationInfo animation;                  ///< information about the animation.
-	byte processing_time;                     ///< Periodic refresh multiplier
-	byte minimum_life;                        ///< The minimum number of years this house will survive before the town rebuilds it
+	uint8_t processing_time;                     ///< Periodic refresh multiplier
+	uint8_t minimum_life;                        ///< The minimum number of years this house will survive before the town rebuilds it
 	CargoTypes watched_cargoes;               ///< Cargo types watched for acceptance.
 
+	CargoLabel accepts_cargo_label[HOUSE_ORIGINAL_NUM_ACCEPTS]; ///< input landscape cargo slots
+
+	HouseID Index() const;
 	Money GetRemovalCost() const;
 
-	static inline HouseSpec *Get(size_t house_id)
-	{
-		assert(house_id < NUM_HOUSES);
-		extern HouseSpec _house_specs[];
-		return &_house_specs[house_id];
-	}
+	static std::vector<HouseSpec> &Specs();
+	static HouseSpec *Get(size_t house_id);
 };
 
 /**
@@ -137,10 +130,12 @@ struct HouseSpec {
  * @param hid the HouseID to get the override for.
  * @return the HouseID to actually work with.
  */
-static inline HouseID GetTranslatedHouseID(HouseID hid)
+inline HouseID GetTranslatedHouseID(HouseID hid)
 {
 	const HouseSpec *hs = HouseSpec::Get(hid);
 	return hs->grf_prop.override == INVALID_HOUSE_ID ? hid : hs->grf_prop.override;
 }
+
+void ShowBuildHousePicker(struct Window *);
 
 #endif /* HOUSE_H */

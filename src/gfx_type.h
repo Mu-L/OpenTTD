@@ -10,13 +10,13 @@
 #ifndef GFX_TYPE_H
 #define GFX_TYPE_H
 
-#include "core/endian_type.hpp"
+#include "core/enum_type.hpp"
 #include "core/geometry_type.hpp"
 #include "zoom_type.h"
 
-typedef uint32 SpriteID;  ///< The number of a sprite, without mapping bits and colourtables
-typedef uint32 PaletteID; ///< The number of the palette
-typedef uint32 CursorID;  ///< The number of the cursor (sprite)
+typedef uint32_t SpriteID;  ///< The number of a sprite, without mapping bits and colourtables
+typedef uint32_t PaletteID; ///< The number of the palette
+typedef uint32_t CursorID;  ///< The number of the cursor (sprite)
 
 /** Combination of a palette sprite and a 'real' sprite */
 struct PalSpriteID {
@@ -24,7 +24,7 @@ struct PalSpriteID {
 	PaletteID pal;    ///< The palette (use \c PAL_NONE) if not needed)
 };
 
-enum WindowKeyCodes {
+enum WindowKeyCodes : uint16_t {
 	WKC_SHIFT = 0x8000,
 	WKC_CTRL  = 0x4000,
 	WKC_ALT   = 0x2000,
@@ -106,9 +106,16 @@ enum WindowKeyCodes {
 
 /** A single sprite of a list of animated cursors */
 struct AnimCursor {
-	static const CursorID LAST = MAX_UVALUE(CursorID);
+	static const CursorID LAST = std::numeric_limits<CursorID>::max();
 	CursorID sprite;   ///< Must be set to LAST_ANIM when it is the last sprite of the loop
-	byte display_time; ///< Amount of ticks this sprite will be shown
+	uint8_t display_time; ///< Amount of ticks this sprite will be shown
+};
+
+struct CursorSprite {
+	PalSpriteID image; ///< Image.
+	Point pos; ///< Relative position.
+
+	constexpr CursorSprite(SpriteID spr, PaletteID pal, int x, int y) : image({spr, pal}), pos({x, y}) {}
 };
 
 /** Collection of variables for cursor-display and -animation */
@@ -119,15 +126,13 @@ struct CursorVars {
 	int wheel;                    ///< mouse wheel movement
 	bool fix_at;                  ///< mouse is moving, but cursor is not (used for scrolling)
 
-	/* We need two different vars to keep track of how far the scrollwheel moved.
-	 * OSX uses this for scrolling around the map. */
-	int v_wheel;
-	int h_wheel;
+	/* 2D wheel scrolling for moving around the map */
+	bool wheel_moved;
+	float v_wheel;
+	float h_wheel;
 
 	/* Mouse appearance */
-	PalSpriteID sprite_seq[16];   ///< current image of cursor
-	Point sprite_pos[16];         ///< relative position of individual sprites
-	uint sprite_count;            ///< number of sprites to draw
+	std::vector<CursorSprite> sprites; ///< Sprites comprising cursor.
 	Point total_offs, total_size; ///< union of sprite properties
 
 	Point draw_pos, draw_size;    ///< position and size bounding-box for drawing
@@ -144,11 +149,7 @@ struct CursorVars {
 	bool vehchain;                ///< vehicle chain is dragged
 
 	void UpdateCursorPositionRelative(int delta_x, int delta_y);
-	bool UpdateCursorPosition(int x, int y, bool queued_warp);
-
-private:
-	bool queued_warp;
-	Point last_position;
+	bool UpdateCursorPosition(int x, int y);
 };
 
 /** Data about how and where to blit pixels. */
@@ -159,17 +160,11 @@ struct DrawPixelInfo {
 	ZoomLevel zoom;
 };
 
-/** Structure to access the alpha, red, green, and blue channels from a 32 bit number. */
-union Colour {
-	uint32 data; ///< Conversion of the channel information to a 32 bit number.
+/** Packed colour union to access the alpha, red, green, and blue channels from a 32 bit number for Emscripten build. */
+union ColourRGBA {
+	uint32_t data; ///< Conversion of the channel information to a 32 bit number.
 	struct {
-#if defined(__EMSCRIPTEN__)
-		uint8 r, g, b, a;  ///< colour channels as used in browsers
-#elif TTD_ENDIAN == TTD_BIG_ENDIAN
-		uint8 a, r, g, b; ///< colour channels in BE order
-#else
-		uint8 b, g, r, a; ///< colour channels in LE order
-#endif /* TTD_ENDIAN == TTD_BIG_ENDIAN */
+		uint8_t r, g, b, a; ///< colour channels as used in browsers
 	};
 
 	/**
@@ -179,31 +174,72 @@ union Colour {
 	 * @param b The channel for the blue colour.
 	 * @param a The channel for the alpha/transparency.
 	 */
-	Colour(uint8 r, uint8 g, uint8 b, uint8 a = 0xFF) :
-#if defined(__EMSCRIPTEN__)
-		r(r), g(g), b(b), a(a)
-#elif TTD_ENDIAN == TTD_BIG_ENDIAN
-		a(a), r(r), g(g), b(b)
-#else
-		b(b), g(g), r(r), a(a)
-#endif /* TTD_ENDIAN == TTD_BIG_ENDIAN */
-	{
-	}
+	constexpr ColourRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) : r(r), g(g), b(b), a(a) { }
 
 	/**
 	 * Create a new colour.
 	 * @param data The colour in the correct packed format.
 	 */
-	Colour(uint data = 0) : data(data)
-	{
-	}
+	constexpr ColourRGBA(uint data = 0) : data(data) { }
 };
 
-static_assert(sizeof(Colour) == sizeof(uint32));
+/** Packed colour union to access the alpha, red, green, and blue channels from a 32 bit number for big-endian systems. */
+union ColourARGB {
+	uint32_t data; ///< Conversion of the channel information to a 32 bit number.
+	struct {
+		uint8_t a, r, g, b; ///< colour channels in BE order
+	};
+
+	/**
+	 * Create a new colour.
+	 * @param r The channel for the red colour.
+	 * @param g The channel for the green colour.
+	 * @param b The channel for the blue colour.
+	 * @param a The channel for the alpha/transparency.
+	 */
+	constexpr ColourARGB(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) : a(a), r(r), g(g), b(b) { }
+
+	/**
+	 * Create a new colour.
+	 * @param data The colour in the correct packed format.
+	 */
+	constexpr ColourARGB(uint data = 0) : data(data) { }
+};
+
+/** Packed colour union to access the alpha, red, green, and blue channels from a 32 bit number for little-endian systems. */
+union ColourBGRA {
+	uint32_t data; ///< Conversion of the channel information to a 32 bit number.
+	struct {
+		uint8_t b, g, r, a; ///< colour channels in LE order
+	};
+
+	/**
+	 * Create a new colour.
+	 * @param r The channel for the red colour.
+	 * @param g The channel for the green colour.
+	 * @param b The channel for the blue colour.
+	 * @param a The channel for the alpha/transparency.
+	 */
+	constexpr ColourBGRA(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) : b(b), g(g), r(r), a(a) { }
+
+	/**
+	 * Create a new colour.
+	 * @param data The colour in the correct packed format.
+	 */
+	constexpr ColourBGRA(uint data = 0) : data(data) { }
+};
+
+#if defined(__EMSCRIPTEN__)
+using Colour = ColourRGBA;
+#else
+using Colour = std::conditional_t<std::endian::native == std::endian::little, ColourBGRA, ColourARGB>;
+#endif /* defined(__EMSCRIPTEN__) */
+
+static_assert(sizeof(Colour) == sizeof(uint32_t));
 
 
 /** Available font sizes */
-enum FontSize {
+enum FontSize : uint8_t {
 	FS_NORMAL, ///< Index of the normal font in the font tables.
 	FS_SMALL,  ///< Index of the small font in the font tables.
 	FS_LARGE,  ///< Index of the large font in the font tables.
@@ -212,7 +248,14 @@ enum FontSize {
 
 	FS_BEGIN = FS_NORMAL, ///< First font.
 };
-DECLARE_POSTFIX_INCREMENT(FontSize)
+DECLARE_INCREMENT_DECREMENT_OPERATORS(FontSize)
+
+inline const char *FontSizeToName(FontSize fs)
+{
+	static const char *SIZE_TO_NAME[] = { "medium", "small", "large", "mono" };
+	assert(fs < FS_END);
+	return SIZE_TO_NAME[fs];
+}
 
 /**
  * Used to only draw a part of the sprite.
@@ -223,7 +266,7 @@ struct SubSprite {
 	int left, top, right, bottom;
 };
 
-enum Colours {
+enum Colours : uint8_t {
 	COLOUR_BEGIN,
 	COLOUR_DARK_BLUE = COLOUR_BEGIN,
 	COLOUR_PALE_GREEN,
@@ -244,10 +287,11 @@ enum Colours {
 	COLOUR_END,
 	INVALID_COLOUR = 0xFF,
 };
-template <> struct EnumPropsT<Colours> : MakeEnumPropsT<Colours, byte, COLOUR_BEGIN, COLOUR_END, INVALID_COLOUR, 8> {};
+DECLARE_INCREMENT_DECREMENT_OPERATORS(Colours)
+DECLARE_ENUM_AS_ADDABLE(Colours)
 
 /** Colour of the strings, see _string_colourmap in table/string_colours.h or docs/ottd-colourtext-palette.png */
-enum TextColour {
+enum TextColour : uint16_t {
 	TC_BEGIN       = 0x00,
 	TC_FROMSTRING  = 0x00,
 	TC_BLUE        = 0x00,
@@ -273,41 +317,44 @@ enum TextColour {
 	TC_IS_PALETTE_COLOUR = 0x100, ///< Colour value is already a real palette colour index, not an index of a StringColour.
 	TC_NO_SHADE          = 0x200, ///< Do not add shading to this text colour.
 	TC_FORCED            = 0x400, ///< Ignore colour changes from strings.
+
+	TC_COLOUR_MASK = 0xFF, ///< Mask to test if TextColour (without flags) is within limits.
+	TC_FLAGS_MASK = 0x700, ///< Mask to test if TextColour (with flags) is within limits.
 };
 DECLARE_ENUM_AS_BIT_SET(TextColour)
 
-/** Defines a few values that are related to animations using palette changes */
-enum PaletteAnimationSizes {
-	PALETTE_ANIM_SIZE  = 28,   ///< number of animated colours
-	PALETTE_ANIM_START = 227,  ///< Index in  the _palettes array from which all animations are taking places (table/palettes.h)
-};
+/* A few values that are related to animations using palette changes */
+static constexpr uint8_t PALETTE_ANIM_SIZE = 28; ///< number of animated colours
+static constexpr uint8_t PALETTE_ANIM_START = 227; ///< Index in  the _palettes array from which all animations are taking places (table/palettes.h)
 
 /** Define the operation GfxFillRect performs */
-enum FillRectMode {
+enum FillRectMode : uint8_t {
 	FILLRECT_OPAQUE,  ///< Fill rectangle with a single colour
 	FILLRECT_CHECKER, ///< Draw only every second pixel, used for greying-out
 	FILLRECT_RECOLOUR, ///< Apply a recolour sprite to the screen content
 };
 
 /** Palettes OpenTTD supports. */
-enum PaletteType {
+enum PaletteType : uint8_t {
 	PAL_DOS,        ///< Use the DOS palette.
 	PAL_WINDOWS,    ///< Use the Windows palette.
-	PAL_AUTODETECT, ///< Automatically detect the palette based on the graphics pack.
-	MAX_PAL = 2,    ///< The number of palettes.
 };
 
 /** Types of sprites that might be loaded */
-enum SpriteType : byte {
-	ST_NORMAL   = 0,      ///< The most basic (normal) sprite
-	ST_MAPGEN   = 1,      ///< Special sprite for the map generator
-	ST_FONT     = 2,      ///< A sprite used for fonts
-	ST_RECOLOUR = 3,      ///< Recolour sprite
-	ST_INVALID  = 4,      ///< Pseudosprite or other unusable sprite, used only internally
+enum class SpriteType : uint8_t {
+	Normal   = 0,      ///< The most basic (normal) sprite
+	MapGen   = 1,      ///< Special sprite for the map generator
+	Font     = 2,      ///< A sprite used for fonts
+	Recolour = 3,      ///< Recolour sprite
+	Invalid  = 4,      ///< Pseudosprite or other unusable sprite, used only internally
 };
 
-/** The number of milliseconds per game tick. */
-static const uint MILLISECONDS_PER_TICK = 30;
+/**
+ * The number of milliseconds per game tick.
+ * The value 27 together with a day length of 74 ticks makes one day 1998 milliseconds, almost exactly 2 seconds.
+ * With a 2 second day, one standard month is 1 minute, and one standard year is slightly over 12 minutes.
+ */
+static const uint MILLISECONDS_PER_TICK = 27;
 
 /** Information about the currently used palette. */
 struct Palette {
@@ -317,14 +364,14 @@ struct Palette {
 };
 
 /** Modes for 8bpp support */
-enum Support8bpp {
+enum Support8bpp : uint8_t {
 	S8BPP_NONE = 0, ///< No support for 8bpp by OS or hardware, force 32bpp blitters.
 	S8BPP_SYSTEM,   ///< No 8bpp support by hardware, do not try to use 8bpp video modes or hardware palettes.
 	S8BPP_HARDWARE, ///< Full 8bpp support by OS and hardware.
 };
 
 	/** How to align the to-be drawn text. */
-enum StringAlignment {
+enum StringAlignment : uint8_t {
 	SA_LEFT        = 0 << 0, ///< Left align the text.
 	SA_HOR_CENTER  = 1 << 0, ///< Horizontally center the text.
 	SA_RIGHT       = 2 << 0, ///< Right align the text (must be a single bit).

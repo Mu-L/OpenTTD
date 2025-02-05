@@ -19,7 +19,35 @@
  */
 class ScriptIndustryList : public ScriptList {
 public:
+#ifdef DOXYGEN_API
 	ScriptIndustryList();
+
+	/**
+	 * Apply a filter when building the list.
+	 * @param filter_function The function which will be doing the filtering.
+	 * @param ... The params to give to the filters (minus the first param,
+	 *  which is always the index-value).
+	 * @note You can write your own filters and use them. Just remember that
+	 *  the first parameter should be the index-value, and it should return
+	 *  a bool.
+	 * @note Example:
+	 * @code
+	 *  local water_industries = ScriptIndustryList(ScriptIndustry.HasDock);
+	 *
+	 *  function IsType(industry_id, type)
+	 *  {
+	 *    return ScriptIndustry.GetIndustryType(industry_id) == type;
+	 *  }
+	 *  local industries = ScriptIndustryList(IsType, 0);
+	 * @endcode
+	 */
+	ScriptIndustryList(function filter_function, ...);
+#else
+	/**
+	 * The constructor wrapper from Squirrel.
+	 */
+	ScriptIndustryList(HSQUIRRELVM vm);
+#endif /* DOXYGEN_API */
 };
 
 /**
@@ -30,9 +58,9 @@ public:
 class ScriptIndustryList_CargoAccepting : public ScriptList {
 public:
 	/**
-	 * @param cargo_id The cargo this industry should accept.
+	 * @param cargo_type The cargo this industry should accept.
 	 */
-	ScriptIndustryList_CargoAccepting(CargoID cargo_id);
+	ScriptIndustryList_CargoAccepting(CargoType cargo_type);
 };
 
 /**
@@ -44,9 +72,9 @@ public:
 class ScriptIndustryList_CargoProducing : public ScriptList {
 public:
 	/**
-	 * @param cargo_id The cargo this industry should produce.
+	 * @param cargo_type The cargo this industry should produce.
 	 */
-	ScriptIndustryList_CargoProducing(CargoID cargo_id);
+	ScriptIndustryList_CargoProducing(CargoType cargo_type);
 };
 
 #endif /* SCRIPT_INDUSTRYLIST_HPP */

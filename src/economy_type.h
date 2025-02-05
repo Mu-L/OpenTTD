@@ -16,7 +16,7 @@
 typedef OverflowSafeInt64 Money;
 
 /** Type of the game economy. */
-enum EconomyType : uint8 {
+enum EconomyType : uint8_t {
 	ET_BEGIN = 0,
 	ET_ORIGINAL = 0,
 	ET_SMOOTH = 1,
@@ -24,25 +24,40 @@ enum EconomyType : uint8 {
 	ET_END = 3,
 };
 
+/**
+ * Minimum allowed value of town_cargo_scale/industry_cargo_scale.
+ * Below 13, callback-based industries would produce less than once per month. We round up to 15% because it's a nicer number.
+ * Towns use the same minimum to match, and because below this small towns often produce no cargo.
+ */
+static const int MIN_CARGO_SCALE = 15;
+/**
+ * Maximum allowed value of town_cargo_scale/industry_cargo_scale.
+ * Above 340, callback-based industries would produce more than once per day, which GRFs do not expect.
+ * Towns use the same maximum to match.
+ */
+static const int MAX_CARGO_SCALE = 300;
+/** Default value of town_cargo_scale/industry_cargo_scale. */
+static const int DEF_CARGO_SCALE = 100;
+
 /** Data of the economy. */
 struct Economy {
 	Money max_loan;                       ///< NOSAVE: Maximum possible loan
-	int16 fluct;                          ///< Economy fluctuation status
-	byte interest_rate;                   ///< Interest
-	byte infl_amount;                     ///< inflation amount
-	byte infl_amount_pr;                  ///< inflation rate for payment rates
-	uint32 industry_daily_change_counter; ///< Bits 31-16 are number of industry to be performed, 15-0 are fractional collected daily
-	uint32 industry_daily_increment;      ///< The value which will increment industry_daily_change_counter. Computed value. NOSAVE
-	uint64 inflation_prices;              ///< Cumulated inflation of prices since game start; 16 bit fractional part
-	uint64 inflation_payment;             ///< Cumulated inflation of cargo payment since game start; 16 bit fractional part
+	int16_t fluct;                          ///< Economy fluctuation status
+	uint8_t interest_rate;                   ///< Interest
+	uint8_t infl_amount;                     ///< inflation amount
+	uint8_t infl_amount_pr;                  ///< inflation rate for payment rates
+	uint32_t industry_daily_change_counter; ///< Bits 31-16 are number of industry to be performed, 15-0 are fractional collected daily
+	uint32_t industry_daily_increment;      ///< The value which will increment industry_daily_change_counter. Computed value. NOSAVE
+	uint64_t inflation_prices;              ///< Cumulated inflation of prices since game start; 16 bit fractional part
+	uint64_t inflation_payment;             ///< Cumulated inflation of cargo payment since game start; 16 bit fractional part
 
 	/* Old stuff for savegame conversion only */
 	Money old_max_loan_unround;           ///< Old: Unrounded max loan
-	uint16 old_max_loan_unround_fract;    ///< Old: Fraction of the unrounded max loan
+	uint16_t old_max_loan_unround_fract;    ///< Old: Fraction of the unrounded max loan
 };
 
 /** Score categories in the detailed performance rating. */
-enum ScoreID {
+enum ScoreID : uint8_t {
 	SCORE_BEGIN      = 0,
 	SCORE_VEHICLES   = 0,
 	SCORE_STATIONS   = 1,
@@ -56,10 +71,15 @@ enum ScoreID {
 	SCORE_TOTAL      = 9,  ///< This must always be the last entry
 	SCORE_END        = 10, ///< How many scores are there..
 
-	SCORE_MAX = 1000,      ///< The max score that can be in the performance history
-	/* the scores together of score_info is allowed to be more! */
+
 };
-DECLARE_POSTFIX_INCREMENT(ScoreID)
+DECLARE_INCREMENT_DECREMENT_OPERATORS(ScoreID)
+
+/**
+ * The max score that can be in the performance history.
+ * The scores together of score_info is allowed to be more!
+ */
+static constexpr int SCORE_MAX = 1000;
 
 /** Data structure for storing how the score is computed for a single score id. */
 struct ScoreInfo {
@@ -71,7 +91,7 @@ struct ScoreInfo {
  * Enumeration of all base prices for use with #Prices.
  * The prices are ordered as they are expected by NewGRF cost multipliers, so don't shuffle them.
  */
-enum Price {
+enum Price : uint8_t {
 	PR_BEGIN = 0,
 	PR_STATION_VALUE = 0,
 	PR_BUILD_RAIL,
@@ -148,13 +168,13 @@ enum Price {
 	PR_END,
 	INVALID_PRICE = 0xFF
 };
-DECLARE_POSTFIX_INCREMENT(Price)
+DECLARE_INCREMENT_DECREMENT_OPERATORS(Price)
 
 typedef Money Prices[PR_END]; ///< Prices of everything. @see Price
-typedef int8 PriceMultipliers[PR_END];
+typedef int8_t PriceMultipliers[PR_END];
 
 /** Types of expenses. */
-enum ExpensesType : byte {
+enum ExpensesType : uint8_t {
 	EXPENSES_CONSTRUCTION =  0,   ///< Construction costs.
 	EXPENSES_NEW_VEHICLES,        ///< New vehicles.
 	EXPENSES_TRAIN_RUN,           ///< Running costs trains.
@@ -162,23 +182,25 @@ enum ExpensesType : byte {
 	EXPENSES_AIRCRAFT_RUN,        ///< Running costs aircraft.
 	EXPENSES_SHIP_RUN,            ///< Running costs ships.
 	EXPENSES_PROPERTY,            ///< Property costs.
-	EXPENSES_TRAIN_INC,           ///< Income from trains.
-	EXPENSES_ROADVEH_INC,         ///< Income from road vehicles.
-	EXPENSES_AIRCRAFT_INC,        ///< Income from aircraft.
-	EXPENSES_SHIP_INC,            ///< Income from ships.
-	EXPENSES_LOAN_INT,            ///< Interest payments over the loan.
+	EXPENSES_TRAIN_REVENUE,       ///< Revenue from trains.
+	EXPENSES_ROADVEH_REVENUE,     ///< Revenue from road vehicles.
+	EXPENSES_AIRCRAFT_REVENUE,    ///< Revenue from aircraft.
+	EXPENSES_SHIP_REVENUE,        ///< Revenue from ships.
+	EXPENSES_LOAN_INTEREST,       ///< Interest payments over the loan.
 	EXPENSES_OTHER,               ///< Other expenses.
 	EXPENSES_END,                 ///< Number of expense types.
 	INVALID_EXPENSES      = 0xFF, ///< Invalid expense type.
 };
 
-/** Define basic enum properties for ExpensesType */
-template <> struct EnumPropsT<ExpensesType> : MakeEnumPropsT<ExpensesType, byte, EXPENSES_CONSTRUCTION, EXPENSES_END, INVALID_EXPENSES, 8> {};
+/**
+ * Data type for storage of Money for each #ExpensesType category.
+ */
+using Expenses = std::array<Money, EXPENSES_END>;
 
 /**
  * Categories of a price bases.
  */
-enum PriceCategory {
+enum PriceCategory : uint8_t {
 	PCAT_NONE,         ///< Not affected by difficulty settings
 	PCAT_RUNNING,      ///< Price is affected by "vehicle running cost" difficulty setting
 	PCAT_CONSTRUCTION, ///< Price is affected by "construction cost" difficulty setting
@@ -197,17 +219,19 @@ struct PriceBaseSpec {
 /** The "steps" in loan size, in British Pounds! */
 static const int LOAN_INTERVAL = 10000;
 /** The size of loan for a new company, in British Pounds! */
-static const int64 INITIAL_LOAN = 100000;
+static const int64_t INITIAL_LOAN = 100000;
+/** The max amount possible to configure for a max loan of a company. */
+static const int64_t MAX_LOAN_LIMIT = 2000000000;
 
 /**
- * Maximum inflation (including fractional part) without causing overflows in int64 price computations.
+ * Maximum inflation (including fractional part) without causing overflows in int64_t price computations.
  * This allows for 32 bit base prices (21 are currently needed).
  * Considering the sign bit and 16 fractional bits, there are 15 bits left.
  * 170 years of 4% inflation result in a inflation of about 822, so 10 bits are actually enough.
  * Note that NewGRF multipliers share the 16 fractional bits.
  * @see MAX_PRICE_MODIFIER
  */
-static const uint64 MAX_INFLATION = (1ull << (63 - 32)) - 1;
+static const uint64_t MAX_INFLATION = (1ull << (63 - 32)) - 1;
 
 /**
  * Maximum NewGRF price modifiers.
@@ -230,6 +254,6 @@ static const uint ROAD_STOP_TRACKBIT_FACTOR = 2;
 static const uint LOCK_DEPOT_TILE_FACTOR = 2;
 
 struct CargoPayment;
-typedef uint32 CargoPaymentID;
+typedef uint32_t CargoPaymentID;
 
 #endif /* ECONOMY_TYPE_H */

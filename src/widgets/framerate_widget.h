@@ -11,7 +11,7 @@
 #define WIDGETS_FRAMERATE_WIDGET_H
 
 /** Widgets of the #FramerateWindow class. */
-enum FramerateWindowWidgets {
+enum FramerateWindowWidgets : WidgetID {
 	WID_FRW_CAPTION,
 	WID_FRW_RATE_GAMELOOP,
 	WID_FRW_RATE_DRAWING,
@@ -21,12 +21,11 @@ enum FramerateWindowWidgets {
 	WID_FRW_TIMES_CURRENT,
 	WID_FRW_TIMES_AVERAGE,
 	WID_FRW_ALLOCSIZE,
-	WID_FRW_SEL_MEMORY,
 	WID_FRW_SCROLLBAR,
 };
 
 /** Widgets of the #FrametimeGraphWindow class. */
-enum FrametimeGraphWindowWidgets {
+enum FrametimeGraphWindowWidgets : WidgetID {
 	WID_FGW_CAPTION,
 	WID_FGW_GRAPH,
 };

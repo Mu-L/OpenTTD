@@ -10,14 +10,50 @@
 #include "stdafx.h"
 #include "command_func.h"
 #include "company_func.h"
-#include "date_func.h"
+#include "timer/timer_game_tick.h"
+#include "timer/timer_game_economy.h"
 #include "window_func.h"
 #include "vehicle_base.h"
-#include "cmd_helper.h"
+#include "timetable_cmd.h"
+#include "timetable.h"
 
 #include "table/strings.h"
 
 #include "safeguards.h"
+
+/**
+ * Get the TimerGameTick::TickCounter tick of a given date.
+ * @param start_date The date when the timetable starts.
+ * @return The first tick of this date.
+ */
+TimerGameTick::TickCounter GetStartTickFromDate(TimerGameEconomy::Date start_date)
+{
+	/* Calculate the offset in ticks from the current date. */
+	TimerGameTick::Ticks tick_offset = (start_date - TimerGameEconomy::date).base() * Ticks::DAY_TICKS;
+
+	/* Compensate for the current date_fract. */
+	tick_offset -= TimerGameEconomy::date_fract;
+
+	/* Return the current tick plus the offset. */
+	return TimerGameTick::counter + tick_offset;
+}
+
+/**
+ * Get a date from a given start tick of timetable.
+ * @param start_tick The TimerGameTick::TickCounter when the timetable starts.
+ * @return The date when we reach this tick.
+ */
+TimerGameEconomy::Date GetDateFromStartTick(TimerGameTick::TickCounter start_tick)
+{
+	/* Calculate the offset in ticks from the current counter tick. */
+	TimerGameTick::Ticks tick_offset = start_tick - TimerGameTick::counter;
+
+	/* Compensate for the current date_fract. */
+	tick_offset += TimerGameEconomy::date_fract;
+
+	/* Return the current date plus the offset in days. */
+	return TimerGameEconomy::date + (tick_offset / Ticks::DAY_TICKS);
+}
 
 /**
  * Change/update a particular timetable entry.
@@ -27,9 +63,10 @@
  * @param mtf          Which part of the timetable entry to change.
  * @param timetabled   If the new value is explicitly timetabled.
  */
-static void ChangeTimetable(Vehicle *v, VehicleOrderID order_number, uint16 val, ModifyTimetableFlags mtf, bool timetabled)
+static void ChangeTimetable(Vehicle *v, VehicleOrderID order_number, uint16_t val, ModifyTimetableFlags mtf, bool timetabled)
 {
 	Order *order = v->GetOrder(order_number);
+	assert(order != nullptr);
 	int total_delta = 0;
 	int timetable_delta = 0;
 
@@ -55,8 +92,8 @@ static void ChangeTimetable(Vehicle *v, VehicleOrderID order_number, uint16 val,
 		default:
 			NOT_REACHED();
 	}
-	v->orders.list->UpdateTotalDuration(total_delta);
-	v->orders.list->UpdateTimetableDuration(timetable_delta);
+	v->orders->UpdateTotalDuration(total_delta);
+	v->orders->UpdateTimetableDuration(timetable_delta);
 
 	for (v = v->FirstShared(); v != nullptr; v = v->NextShared()) {
 		if (v->cur_real_order_index == order_number && v->current_order.Equals(*order)) {
@@ -85,33 +122,25 @@ static void ChangeTimetable(Vehicle *v, VehicleOrderID order_number, uint16 val,
 
 /**
  * Change timetable data of an order.
- * @param tile Not used.
  * @param flags Operation to perform.
- * @param p1 Various bitstuffed elements
- * - p1 = (bit  0-19) - Vehicle with the orders to change.
- * - p1 = (bit 20-27) - Order index to modify.
- * - p1 = (bit 28-29) - Timetable data to change (@see ModifyTimetableFlags)
- * @param p2 The amount of time to wait.
- * - p2 = (bit  0-15) - The data to modify as specified by p1 bits 28-29.
- *                      0 to clear times, UINT16_MAX to clear speed limit.
- * @param text unused
+ * @param veh Vehicle with the orders to change.
+ * @param order_number Order index to modify.
+ * @param mtf Timetable data to change (@see ModifyTimetableFlags)
+ * @param data The data to modify as specified by \c mtf.
+ *             0 to clear times, UINT16_MAX to clear speed limit.
  * @return the cost of this operation or an error
  */
-CommandCost CmdChangeTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const std::string &text)
+CommandCost CmdChangeTimetable(DoCommandFlag flags, VehicleID veh, VehicleOrderID order_number, ModifyTimetableFlags mtf, uint16_t data)
 {
-	VehicleID veh = GB(p1, 0, 20);
-
 	Vehicle *v = Vehicle::GetIfValid(veh);
 	if (v == nullptr || !v->IsPrimaryVehicle()) return CMD_ERROR;
 
 	CommandCost ret = CheckOwnership(v->owner);
 	if (ret.Failed()) return ret;
 
-	VehicleOrderID order_number = GB(p1, 20, 8);
 	Order *order = v->GetOrder(order_number);
 	if (order == nullptr || order->IsType(OT_IMPLICIT)) return CMD_ERROR;
 
-	ModifyTimetableFlags mtf = Extract<ModifyTimetableFlags, 28, 2>(p1);
 	if (mtf >= MTF_END) return CMD_ERROR;
 
 	int wait_time   = order->GetWaitTime();
@@ -119,15 +148,15 @@ CommandCost CmdChangeTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1, u
 	int max_speed   = order->GetMaxSpeed();
 	switch (mtf) {
 		case MTF_WAIT_TIME:
-			wait_time = GB(p2, 0, 16);
+			wait_time = data;
 			break;
 
 		case MTF_TRAVEL_TIME:
-			travel_time = GB(p2, 0, 16);
+			travel_time = data;
 			break;
 
 		case MTF_TRAVEL_SPEED:
-			max_speed = GB(p2, 0, 16);
+			max_speed = data;
 			if (max_speed == 0) max_speed = UINT16_MAX; // Disable speed limit.
 			break;
 
@@ -138,13 +167,13 @@ CommandCost CmdChangeTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1, u
 	if (wait_time != order->GetWaitTime()) {
 		switch (order->GetType()) {
 			case OT_GOTO_STATION:
-				if (order->GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) return_cmd_error(STR_ERROR_TIMETABLE_NOT_STOPPING_HERE);
+				if (order->GetNonStopType() & ONSF_NO_STOP_AT_DESTINATION_STATION) return CommandCost(STR_ERROR_TIMETABLE_NOT_STOPPING_HERE);
 				break;
 
 			case OT_CONDITIONAL:
 				break;
 
-			default: return_cmd_error(STR_ERROR_TIMETABLE_ONLY_WAIT_AT_STATIONS);
+			default: return CommandCost(STR_ERROR_TIMETABLE_ONLY_WAIT_AT_STATIONS);
 		}
 	}
 
@@ -176,6 +205,45 @@ CommandCost CmdChangeTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1, u
 			default:
 				break;
 		}
+
+		/* Unbunching data is no longer valid for any vehicle in this shared order group. */
+		Vehicle *u = v->FirstShared();
+		for (; u != nullptr; u = u->NextShared()) {
+			u->ResetDepotUnbunching();
+		}
+	}
+
+	return CommandCost();
+}
+
+/**
+ * Change timetable data of all orders of a vehicle.
+ * @param flags Operation to perform.
+ * @param veh Vehicle with the orders to change.
+ * @param mtf Timetable data to change (@see ModifyTimetableFlags)
+ * @param data The data to modify as specified by \c mtf.
+ *             0 to clear times, UINT16_MAX to clear speed limit.
+ * @return the cost of this operation or an error
+ */
+CommandCost CmdBulkChangeTimetable(DoCommandFlag flags, VehicleID veh, ModifyTimetableFlags mtf, uint16_t data)
+{
+	Vehicle *v = Vehicle::GetIfValid(veh);
+	if (v == nullptr || !v->IsPrimaryVehicle()) return CMD_ERROR;
+
+	CommandCost ret = CheckOwnership(v->owner);
+	if (ret.Failed()) return ret;
+
+	if (mtf >= MTF_END) return CMD_ERROR;
+
+	if (v->GetNumOrders() == 0) return CMD_ERROR;
+
+	if (flags & DC_EXEC) {
+		for (VehicleOrderID order_number = 0; order_number < v->GetNumOrders(); order_number++) {
+			Order *order = v->GetOrder(order_number);
+			if (order == nullptr || order->IsType(OT_IMPLICIT)) continue;
+
+			Command<CMD_CHANGE_TIMETABLE>::Do(DC_EXEC, v->index, order_number, mtf, data);
+		}
 	}
 
 	return CommandCost();
@@ -183,27 +251,52 @@ CommandCost CmdChangeTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1, u
 
 /**
  * Clear the lateness counter to make the vehicle on time.
- * @param tile Not used.
  * @param flags Operation to perform.
- * @param p1 Various bitstuffed elements
- * - p1 = (bit  0-19) - Vehicle with the orders to change.
- * @param p2 unused
- * @param text unused
+ * @param veh Vehicle with the orders to change.
+ * @param apply_to_group Set to reset the late counter for all vehicles sharing the orders.
  * @return the cost of this operation or an error
  */
-CommandCost CmdSetVehicleOnTime(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const std::string &text)
+CommandCost CmdSetVehicleOnTime(DoCommandFlag flags, VehicleID veh, bool apply_to_group)
 {
-	VehicleID veh = GB(p1, 0, 20);
-
 	Vehicle *v = Vehicle::GetIfValid(veh);
-	if (v == nullptr || !v->IsPrimaryVehicle() || v->orders.list == nullptr) return CMD_ERROR;
+	if (v == nullptr || !v->IsPrimaryVehicle() || v->orders == nullptr) return CMD_ERROR;
+
+	/* A vehicle can't be late if its timetable hasn't started.
+	 * If we're setting all vehicles in the group, we handle that below. */
+	if (!apply_to_group && !HasBit(v->vehicle_flags, VF_TIMETABLE_STARTED)) return CommandCost(STR_ERROR_TIMETABLE_NOT_STARTED);
 
 	CommandCost ret = CheckOwnership(v->owner);
 	if (ret.Failed()) return ret;
 
 	if (flags & DC_EXEC) {
-		v->lateness_counter = 0;
-		SetWindowDirty(WC_VEHICLE_TIMETABLE, v->index);
+		if (apply_to_group) {
+			TimerGameTick::Ticks most_late = 0;
+			for (Vehicle *u = v->FirstShared(); u != nullptr; u = u->NextShared()) {
+				/* A vehicle can't be late if its timetable hasn't started. */
+				if (!HasBit(v->vehicle_flags, VF_TIMETABLE_STARTED)) continue;
+
+				if (u->lateness_counter > most_late) {
+					most_late = u->lateness_counter;
+				}
+
+				/* Unbunching data is no longer valid. */
+				u->ResetDepotUnbunching();
+			}
+			if (most_late > 0) {
+				for (Vehicle *u = v->FirstShared(); u != nullptr; u = u->NextShared()) {
+					/* A vehicle can't be late if its timetable hasn't started. */
+					if (!HasBit(v->vehicle_flags, VF_TIMETABLE_STARTED)) continue;
+
+					u->lateness_counter -= most_late;
+					SetWindowDirty(WC_VEHICLE_TIMETABLE, u->index);
+				}
+			}
+		} else {
+			v->lateness_counter = 0;
+			/* Unbunching data is no longer valid. */
+			v->ResetDepotUnbunching();
+			SetWindowDirty(WC_VEHICLE_TIMETABLE, v->index);
+		}
 	}
 
 	return CommandCost();
@@ -249,57 +342,66 @@ static bool VehicleTimetableSorter(Vehicle * const &a, Vehicle * const &b)
 
 /**
  * Set the start date of the timetable.
- * @param tile Not used.
  * @param flags Operation to perform.
- * @param p2 Various bitstuffed elements
- * - p2 = (bit 0-19) - Vehicle ID.
- * - p2 = (bit 20)   - Set to 1 to set timetable start for all vehicles sharing this order
- * @param p2 The timetable start date.
- * @param text Not used.
+ * @param veh_id Vehicle ID.
+ * @param timetable_all Set to set timetable start for all vehicles sharing this order
+ * @param start_tick The TimerGameTick::counter tick when the timetable starts.
  * @return The error or cost of the operation.
  */
-CommandCost CmdSetTimetableStart(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const std::string &text)
+CommandCost CmdSetTimetableStart(DoCommandFlag flags, VehicleID veh_id, bool timetable_all, TimerGameTick::TickCounter start_tick)
 {
-	bool timetable_all = HasBit(p1, 20);
-	Vehicle *v = Vehicle::GetIfValid(GB(p1, 0, 20));
-	if (v == nullptr || !v->IsPrimaryVehicle() || v->orders.list == nullptr) return CMD_ERROR;
+	Vehicle *v = Vehicle::GetIfValid(veh_id);
+	if (v == nullptr || !v->IsPrimaryVehicle() || v->orders == nullptr) return CMD_ERROR;
 
 	CommandCost ret = CheckOwnership(v->owner);
 	if (ret.Failed()) return ret;
 
-	/* Don't let a timetable start more than 15 years into the future or 1 year in the past. */
-	Date start_date = (Date)p2;
-	if (start_date < 0 || start_date > MAX_DAY) return CMD_ERROR;
-	if (start_date - _date > 15 * DAYS_IN_LEAP_YEAR) return CMD_ERROR;
-	if (_date - start_date > DAYS_IN_LEAP_YEAR) return CMD_ERROR;
-	if (timetable_all && !v->orders.list->IsCompleteTimetable()) return CMD_ERROR;
+	TimerGameTick::Ticks total_duration = v->orders->GetTimetableTotalDuration();
+
+	TimerGameEconomy::Date start_date = GetDateFromStartTick(start_tick);
+
+	/* Don't let a timetable start at an invalid date. */
+	if (start_date < 0 || start_date > EconomyTime::MAX_DATE) return CMD_ERROR;
+
+	/* Don't let a timetable start more than 15 years into the future... */
+	if (start_date - TimerGameEconomy::date > TimerGameEconomy::DateAtStartOfYear(MAX_TIMETABLE_START_YEARS)) return CMD_ERROR;
+	/* ...or 1 year in the past. */
+	if (TimerGameEconomy::date - start_date > EconomyTime::DAYS_IN_LEAP_YEAR) return CMD_ERROR;
+
+	/* If trying to distribute start dates over a shared order group, we need to know the total duration. */
+	if (timetable_all && !v->orders->IsCompleteTimetable()) return CommandCost(STR_ERROR_TIMETABLE_INCOMPLETE);
+
+	/* Don't allow invalid start dates for other vehicles in the shared order group. */
+	if (timetable_all && start_date + (total_duration / Ticks::DAY_TICKS) > EconomyTime::MAX_DATE) return CMD_ERROR;
 
 	if (flags & DC_EXEC) {
 		std::vector<Vehicle *> vehs;
 
 		if (timetable_all) {
-			for (Vehicle *w = v->orders.list->GetFirstSharedVehicle(); w != nullptr; w = w->NextShared()) {
+			for (Vehicle *w = v->orders->GetFirstSharedVehicle(); w != nullptr; w = w->NextShared()) {
 				vehs.push_back(w);
 			}
 		} else {
 			vehs.push_back(v);
 		}
 
-		int total_duration = v->orders.list->GetTimetableTotalDuration();
 		int num_vehs = (uint)vehs.size();
 
 		if (num_vehs >= 2) {
 			std::sort(vehs.begin(), vehs.end(), &VehicleTimetableSorter);
 		}
 
-		int idx = vehs.begin() - std::find(vehs.begin(), vehs.end(), v);
+		int idx = 0;
 
 		for (Vehicle *w : vehs) {
-
 			w->lateness_counter = 0;
 			ClrBit(w->vehicle_flags, VF_TIMETABLE_STARTED);
 			/* Do multiplication, then division to reduce rounding errors. */
-			w->timetable_start = start_date + idx * total_duration / num_vehs / DAY_TICKS;
+			w->timetable_start = start_tick + (idx * total_duration / num_vehs);
+
+			/* Unbunching data is no longer valid. */
+			v->ResetDepotUnbunching();
+
 			SetWindowDirty(WC_VEHICLE_TIMETABLE, w->index);
 			++idx;
 		}
@@ -314,27 +416,22 @@ CommandCost CmdSetTimetableStart(TileIndex tile, DoCommandFlag flags, uint32 p1,
  * Start or stop filling the timetable automatically from the time the vehicle
  * actually takes to complete it. When starting to autofill the current times
  * are cleared and the timetable will start again from scratch.
- * @param tile Not used.
  * @param flags Operation to perform.
- * @param p1 Vehicle index.
- * @param p2 Various bitstuffed elements
- * - p2 = (bit 0) - Set to 1 to enable, 0 to disable autofill.
- * - p2 = (bit 1) - Set to 1 to preserve waiting times in non-destructive mode
- * @param text unused
+ * @param veh Vehicle index.
+ * @param autofill Enable or disable autofill
+ * @param preserve_wait_time Set to preserve waiting times in non-destructive mode
  * @return the cost of this operation or an error
  */
-CommandCost CmdAutofillTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const std::string &text)
+CommandCost CmdAutofillTimetable(DoCommandFlag flags, VehicleID veh, bool autofill, bool preserve_wait_time)
 {
-	VehicleID veh = GB(p1, 0, 20);
-
 	Vehicle *v = Vehicle::GetIfValid(veh);
-	if (v == nullptr || !v->IsPrimaryVehicle() || v->orders.list == nullptr) return CMD_ERROR;
+	if (v == nullptr || !v->IsPrimaryVehicle() || v->orders == nullptr) return CMD_ERROR;
 
 	CommandCost ret = CheckOwnership(v->owner);
 	if (ret.Failed()) return ret;
 
 	if (flags & DC_EXEC) {
-		if (HasBit(p2, 0)) {
+		if (autofill) {
 			/* Start autofilling the timetable, which clears the
 			 * "timetable has started" bit. Times are not cleared anymore, but are
 			 * overwritten when the order is reached now. */
@@ -342,7 +439,7 @@ CommandCost CmdAutofillTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1,
 			ClrBit(v->vehicle_flags, VF_TIMETABLE_STARTED);
 
 			/* Overwrite waiting times only if they got longer */
-			if (HasBit(p2, 1)) SetBit(v->vehicle_flags, VF_AUTOFILL_PRES_WAIT_TIME);
+			if (preserve_wait_time) SetBit(v->vehicle_flags, VF_AUTOFILL_PRES_WAIT_TIME);
 
 			v->timetable_start = 0;
 			v->lateness_counter = 0;
@@ -371,7 +468,7 @@ CommandCost CmdAutofillTimetable(TileIndex tile, DoCommandFlag flags, uint32 p1,
  */
 void UpdateVehicleTimetable(Vehicle *v, bool travelling)
 {
-	uint time_taken = v->current_order_time;
+	TimerGameTick::Ticks time_taken = v->current_order_time;
 
 	v->current_order_time = 0;
 
@@ -379,6 +476,7 @@ void UpdateVehicleTimetable(Vehicle *v, bool travelling)
 
 	if (v->cur_real_order_index >= v->GetNumOrders()) return;
 	Order *real_current_order = v->GetOrder(v->cur_real_order_index);
+	assert(real_current_order != nullptr);
 
 	VehicleOrderID first_manual_order = 0;
 	for (Order *o = v->GetFirstOrder(); o != nullptr && o->IsType(OT_IMPLICIT); o = o->next) {
@@ -396,7 +494,7 @@ void UpdateVehicleTimetable(Vehicle *v, bool travelling)
 		just_started = !HasBit(v->vehicle_flags, VF_TIMETABLE_STARTED);
 
 		if (v->timetable_start != 0) {
-			v->lateness_counter = (_date - v->timetable_start) * DAY_TICKS + _date_fract;
+			v->lateness_counter = TimerGameTick::counter - v->timetable_start;
 			v->timetable_start = 0;
 		}
 
@@ -421,16 +519,17 @@ void UpdateVehicleTimetable(Vehicle *v, bool travelling)
 	/* Before modifying waiting times, check whether we want to preserve bigger ones. */
 	if (!real_current_order->IsType(OT_CONDITIONAL) &&
 			(travelling || time_taken > real_current_order->GetWaitTime() || remeasure_wait_time)) {
-		/* Round the time taken up to the nearest day, as this will avoid
-		 * confusion for people who are timetabling in days, and can be
-		 * adjusted later by people who aren't.
+		/* Round up to the unit currently shown in the GUI for days and seconds.
+		 * Round up to seconds if currently used display style is ticks.
+		 * Players timetabling in Ticks can adjust later.
 		 * For trains/aircraft multiple movement cycles are done in one
 		 * tick. This makes it possible to leave the station and process
 		 * e.g. a depot order in the same tick, causing it to not fill
 		 * the timetable entry like is done for road vehicles/ships.
 		 * Thus always make sure at least one tick is used between the
 		 * processing of different orders when filling the timetable. */
-		uint time_to_set = CeilDiv(std::max(time_taken, 1U), DAY_TICKS) * DAY_TICKS;
+		uint factor = _settings_client.gui.timetable_mode == TimetableMode::Days ? Ticks::DAY_TICKS : Ticks::TICKS_PER_SECOND;
+		uint time_to_set = CeilDiv(std::max(time_taken, 1), factor) * factor;
 
 		if (travelling && (autofilling || !real_current_order->IsTravelTimetabled())) {
 			ChangeTimetable(v, v->cur_real_order_index, time_to_set, MTF_TRAVEL_TIME, autofilling);
@@ -449,7 +548,7 @@ void UpdateVehicleTimetable(Vehicle *v, bool travelling)
 
 	if (autofilling) return;
 
-	uint timetabled = travelling ? real_current_order->GetTimetabledTravel() :
+	TimerGameTick::Ticks timetabled = travelling ? real_current_order->GetTimetabledTravel() :
 			real_current_order->GetTimetabledWait();
 
 	/* Vehicles will wait at stations if they arrive early even if they are not
@@ -463,10 +562,10 @@ void UpdateVehicleTimetable(Vehicle *v, bool travelling)
 	 * check how many ticks the (fully filled) timetable has. If a timetable cycle is
 	 * shorter than the amount of ticks we are late we reduce the lateness by the
 	 * length of a full cycle till lateness is less than the length of a timetable
-	 * cycle. When the timetable isn't fully filled the cycle will be INVALID_TICKS. */
-	if (v->lateness_counter > (int)timetabled) {
-		Ticks cycle = v->orders.list->GetTimetableTotalDuration();
-		if (cycle != INVALID_TICKS && v->lateness_counter > cycle) {
+	 * cycle. When the timetable isn't fully filled the cycle will be Ticks::INVALID_TICKS. */
+	if (v->lateness_counter > timetabled) {
+		TimerGameTick::Ticks cycle = v->orders->GetTimetableTotalDuration();
+		if (cycle != Ticks::INVALID_TICKS && v->lateness_counter > cycle) {
 			v->lateness_counter %= cycle;
 		}
 	}

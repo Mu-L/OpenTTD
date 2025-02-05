@@ -4,7 +4,6 @@
 #define MCF_H
 
 #include "linkgraphjob_base.h"
-#include <vector>
 
 typedef std::vector<Path *> PathVector;
 
@@ -21,10 +20,10 @@ protected:
 			max_saturation(job.Settings().short_path_saturation)
 	{}
 
-	template<class Tannotation, class Tedge_iterator>
+	template <class Tannotation, class Tedge_iterator>
 	void Dijkstra(NodeID from, PathVector &paths);
 
-	uint PushFlow(Edge &edge, Path *path, uint accuracy, uint max_saturation);
+	uint PushFlow(Node &node, NodeID to, Path *path, uint accuracy, uint max_saturation);
 
 	void CleanupPaths(NodeID source, PathVector &paths);
 
@@ -73,7 +72,7 @@ public:
  * Link graph handler for MCF. Creates MultiCommodityFlow instance according to
  * the template parameter.
  */
-template<class Tpass>
+template <class Tpass>
 class MCFHandler : public ComponentHandler {
 public:
 
@@ -81,12 +80,7 @@ public:
 	 * Run the calculation.
 	 * @param graph Component to be calculated.
 	 */
-	virtual void Run(LinkGraphJob &job) const { Tpass pass(job); }
-
-	/**
-	 * Destructor. Has to be given because of virtual Run().
-	 */
-	virtual ~MCFHandler() {}
+	void Run(LinkGraphJob &job) const override { Tpass pass(job); }
 };
 
 #endif /* MCF_H */

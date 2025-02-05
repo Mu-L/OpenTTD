@@ -22,6 +22,8 @@ class ScriptWaypoint : public ScriptBaseStation {
 public:
 	/**
 	 * All waypoint related error messages.
+	 *
+	 * @see ScriptErrorType
 	 */
 	enum ErrorMessages {
 		/** Base for waypoint related errors */
@@ -52,10 +54,11 @@ public:
 	static bool IsValidWaypoint(StationID waypoint_id);
 
 	/**
-	 * Get the StationID of a tile.
+	 * Get the StationID of a tile, if there is a waypoint.
 	 * @param tile The tile to find the StationID of.
-	 * @pre ScriptRail::IsRailWaypointTile(tile).
+	 * @pre IsValidTile(tile).
 	 * @return StationID of the waypoint.
+	 * @post Use IsValidWaypoint() to see if the waypoint is valid.
 	 */
 	static StationID GetWaypointID(TileIndex tile);
 

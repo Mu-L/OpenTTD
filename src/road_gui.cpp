@@ -16,6 +16,7 @@
 #include "command_func.h"
 #include "road_cmd.h"
 #include "station_func.h"
+#include "waypoint_func.h"
 #include "window_func.h"
 #include "vehicle_func.h"
 #include "sound_func.h"
@@ -27,10 +28,21 @@
 #include "hotkeys.h"
 #include "road_gui.h"
 #include "zoom_func.h"
+#include "dropdown_type.h"
+#include "dropdown_func.h"
 #include "engine_base.h"
+#include "station_base.h"
+#include "waypoint_base.h"
 #include "strings_func.h"
 #include "core/geometry_func.hpp"
-#include "date_func.h"
+#include "station_cmd.h"
+#include "waypoint_cmd.h"
+#include "road_cmd.h"
+#include "tunnelbridge_cmd.h"
+#include "newgrf_roadstop.h"
+#include "picker_gui.h"
+#include "timer/timer.h"
+#include "timer/timer_game_calendar.h"
 
 #include "widgets/road_widget.h"
 
@@ -40,33 +52,66 @@
 
 static void ShowRVStationPicker(Window *parent, RoadStopType rs);
 static void ShowRoadDepotPicker(Window *parent);
+static void ShowBuildRoadWaypointPicker(Window *parent);
 
 static bool _remove_button_clicked;
 static bool _one_way_button_clicked;
 
-/**
- * Define the values of the RoadFlags
- * @see CmdBuildLongRoad
- */
-enum RoadFlags {
-	RF_NONE             = 0x00,
-	RF_START_HALFROAD_Y = 0x01,    // The start tile in Y-dir should have only a half road
-	RF_END_HALFROAD_Y   = 0x02,    // The end tile in Y-dir should have only a half road
-	RF_DIR_Y            = 0x04,    // The direction is Y-dir
-	RF_DIR_X            = RF_NONE, // Dummy; Dir X is set when RF_DIR_Y is not set
-	RF_START_HALFROAD_X = 0x08,    // The start tile in X-dir should have only a half road
-	RF_END_HALFROAD_X   = 0x10,    // The end tile in X-dir should have only a half road
-};
-DECLARE_ENUM_AS_BIT_SET(RoadFlags)
-
-static RoadFlags _place_road_flag;
+static Axis _place_road_dir;
+static bool _place_road_start_half_x;
+static bool _place_road_start_half_y;
+static bool _place_road_end_half;
 
 static RoadType _cur_roadtype;
 
 static DiagDirection _road_depot_orientation;
-static DiagDirection _road_station_picker_orientation;
 
-void CcPlaySound_CONSTRUCTION_OTHER(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd)
+struct RoadWaypointPickerSelection {
+	RoadStopClassID sel_class; ///< Selected road waypoint class.
+	uint16_t sel_type; ///< Selected road waypoint type within the class.
+};
+static RoadWaypointPickerSelection _waypoint_gui; ///< Settings of the road waypoint picker.
+
+struct RoadStopPickerSelection {
+	RoadStopClassID sel_class; ///< Selected road stop class.
+	uint16_t sel_type; ///< Selected road stop type within the class.
+	DiagDirection orientation; ///< Selected orientation of the road stop.
+};
+static RoadStopPickerSelection _roadstop_gui;
+
+static bool IsRoadStopEverAvailable(const RoadStopSpec *spec, StationType type)
+{
+	if (spec == nullptr) return true;
+
+	if (spec->flags.Test(RoadStopSpecFlag::RoadOnly) && !RoadTypeIsRoad(_cur_roadtype)) return false;
+	if (spec->flags.Test(RoadStopSpecFlag::TramOnly) && !RoadTypeIsTram(_cur_roadtype)) return false;
+
+	switch (spec->stop_type) {
+		case ROADSTOPTYPE_ALL: return true;
+		case ROADSTOPTYPE_PASSENGER: return type == StationType::Bus;
+		case ROADSTOPTYPE_FREIGHT: return type == StationType::Truck;
+		default: NOT_REACHED();
+	}
+}
+
+/**
+ * Check whether a road stop type can be built.
+ * @return true if building is allowed.
+ */
+static bool IsRoadStopAvailable(const RoadStopSpec *spec, StationType type)
+{
+	if (spec == nullptr) return true;
+	if (!IsRoadStopEverAvailable(spec, type)) return false;
+
+	if (!spec->callback_mask.Test(RoadStopCallbackMask::Avail)) return true;
+
+	uint16_t cb_res = GetRoadStopCallback(CBID_STATION_AVAILABILITY, 0, 0, spec, nullptr, INVALID_TILE, _cur_roadtype, type, 0);
+	if (cb_res == CALLBACK_FAILED) return true;
+
+	return Convert8bitBooleanCallback(spec->grf_prop.grffile, CBID_STATION_AVAILABILITY, cb_res);
+}
+
+void CcPlaySound_CONSTRUCTION_OTHER(Commands, const CommandCost &result, TileIndex tile)
 {
 	if (result.Succeeded() && _settings_client.sound.confirm) SndPlayTileFx(SND_1F_CONSTRUCTION_OTHER, tile);
 }
@@ -91,12 +136,8 @@ static void PlaceRoad_Bridge(TileIndex tile, Window *w)
  *
  * @param result Whether the build succeeded.
  * @param start_tile Starting tile of the tunnel.
- * @param p1 bit 0-3 railtype or roadtypes
- *           bit 8-9 transport type
- * @param p2 unused
- * @param cmd unused
  */
-void CcBuildRoadTunnel(const CommandCost &result, TileIndex start_tile, uint32 p1, uint32 p2, uint32 cmd)
+void CcBuildRoadTunnel(Commands, const CommandCost &result, TileIndex start_tile)
 {
 	if (result.Succeeded()) {
 		if (_settings_client.sound.confirm) SndPlayTileFx(SND_1F_CONSTRUCTION_OTHER, start_tile);
@@ -124,16 +165,15 @@ void ConnectRoadToStructure(TileIndex tile, DiagDirection direction)
 	/* if there is a roadpiece just outside of the station entrance, build a connecting route */
 	if (IsNormalRoadTile(tile)) {
 		if (GetRoadBits(tile, GetRoadTramType(_cur_roadtype)) != ROAD_NONE) {
-			DoCommandP(tile, _cur_roadtype << 4 | DiagDirToRoadBits(ReverseDiagDir(direction)), 0, CMD_BUILD_ROAD);
+			Command<CMD_BUILD_ROAD>::Post(tile, DiagDirToRoadBits(ReverseDiagDir(direction)), _cur_roadtype, DRD_NONE, INVALID_TOWN);
 		}
 	}
 }
 
-void CcRoadDepot(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd)
+void CcRoadDepot(Commands, const CommandCost &result, TileIndex tile, RoadType, DiagDirection dir)
 {
 	if (result.Failed()) return;
 
-	DiagDirection dir = (DiagDirection)GB(p1, 0, 2);
 	if (_settings_client.sound.confirm) SndPlayTileFx(SND_1F_CONSTRUCTION_OTHER, tile);
 	if (!_settings_client.gui.persistent_buildingtools) ResetObjectToPlace();
 	ConnectRoadToStructure(tile, dir);
@@ -143,30 +183,35 @@ void CcRoadDepot(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2
  * Command callback for building road stops.
  * @param result Result of the build road stop command.
  * @param tile Start tile.
- * @param p1 bit 0..7: Width of the road stop.
- *           bit 8..15: Length of the road stop.
- * @param p2 bit 0: 0 For bus stops, 1 for truck stops.
- *           bit 1: 0 For normal stops, 1 for drive-through.
- *           bit 2: Allow stations directly adjacent to other stations.
- *           bit 3..4: Entrance direction (#DiagDirection) for normal stops.
- *           bit 3: #Axis of the road for drive-through stops.
- *           bit 5..9: The roadtype.
- *           bit 16..31: Station ID to join (NEW_STATION if build new one).
- * @param cmd Unused.
+ * @param width Width of the road stop.
+ * @param length Length of the road stop.
+ * @param is_drive_through False for normal stops, true for drive-through.
+ * @param dir Entrance direction (#DiagDirection) for normal stops. Converted to the axis for drive-through stops.
+ * @param spec_class Road stop spec class.
+ * @param spec_index Road stop spec index.
  * @see CmdBuildRoadStop
  */
-void CcRoadStop(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd)
+void CcRoadStop(Commands, const CommandCost &result, TileIndex tile, uint8_t width, uint8_t length, RoadStopType, bool is_drive_through,
+		DiagDirection dir, RoadType, RoadStopClassID spec_class, uint16_t spec_index, StationID, bool)
 {
 	if (result.Failed()) return;
 
-	DiagDirection dir = (DiagDirection)GB(p2, 3, 2);
 	if (_settings_client.sound.confirm) SndPlayTileFx(SND_1F_CONSTRUCTION_OTHER, tile);
 	if (!_settings_client.gui.persistent_buildingtools) ResetObjectToPlace();
-	TileArea roadstop_area(tile, GB(p1, 0, 8), GB(p1, 8, 8));
-	for (TileIndex cur_tile : roadstop_area) {
-		ConnectRoadToStructure(cur_tile, dir);
-		/* For a drive-through road stop build connecting road for other entrance. */
-		if (HasBit(p2, 1)) ConnectRoadToStructure(cur_tile, ReverseDiagDir(dir));
+
+	bool connect_to_road = true;
+	if ((uint)spec_class < RoadStopClass::GetClassCount() && spec_index < RoadStopClass::Get(spec_class)->GetSpecCount()) {
+		const RoadStopSpec *roadstopspec = RoadStopClass::Get(spec_class)->GetSpec(spec_index);
+		if (roadstopspec != nullptr && roadstopspec->flags.Test(RoadStopSpecFlag::NoAutoRoadConnection)) connect_to_road = false;
+	}
+
+	if (connect_to_road) {
+		TileArea roadstop_area(tile, width, length);
+		for (TileIndex cur_tile : roadstop_area) {
+			ConnectRoadToStructure(cur_tile, dir);
+			/* For a drive-through road stop build connecting road for other entrance. */
+			if (is_drive_through) ConnectRoadToStructure(cur_tile, ReverseDiagDir(dir));
+		}
 	}
 }
 
@@ -174,26 +219,55 @@ void CcRoadStop(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2,
  * Place a new road stop.
  * @param start_tile First tile of the area.
  * @param end_tile Last tile of the area.
- * @param p2 bit 0: 0 For bus stops, 1 for truck stops.
- *           bit 2: Allow stations directly adjacent to other stations.
- *           bit 5..10: The roadtypes.
- * @param cmd Command to use.
+ * @param stop_type Type of stop (bus/truck).
+ * @param adjacent Allow stations directly adjacent to other stations.
+ * @param rt The roadtypes.
+ * @param err_msg Error message to show.
  * @see CcRoadStop()
  */
-static void PlaceRoadStop(TileIndex start_tile, TileIndex end_tile, uint32 p2, uint32 cmd)
+static void PlaceRoadStop(TileIndex start_tile, TileIndex end_tile, RoadStopType stop_type, bool adjacent, RoadType rt, StringID err_msg)
 {
-	uint8 ddir = _road_station_picker_orientation;
-	SB(p2, 16, 16, INVALID_STATION); // no station to join
-
-	if (ddir >= DIAGDIR_END) {
-		SetBit(p2, 1); // It's a drive-through stop.
-		ddir -= DIAGDIR_END; // Adjust picker result to actual direction.
-	}
-	p2 |= ddir << 3; // Set the DiagDirecion into p2 bits 3 and 4.
-
 	TileArea ta(start_tile, end_tile);
-	CommandContainer cmdcont = { ta.tile, (uint32)(ta.w | ta.h << 8), p2, cmd, CcRoadStop, "" };
-	ShowSelectStationIfNeeded(cmdcont, ta);
+	DiagDirection ddir = _roadstop_gui.orientation;
+	bool drive_through = ddir >= DIAGDIR_END;
+	if (drive_through) ddir = static_cast<DiagDirection>(ddir - DIAGDIR_END); // Adjust picker result to actual direction.
+	RoadStopClassID spec_class = _roadstop_gui.sel_class;
+	uint16_t spec_index = _roadstop_gui.sel_type;
+
+	auto proc = [=](bool test, StationID to_join) -> bool {
+		if (test) {
+			return Command<CMD_BUILD_ROAD_STOP>::Do(CommandFlagsToDCFlags(GetCommandFlags<CMD_BUILD_ROAD_STOP>()), ta.tile, ta.w, ta.h, stop_type, drive_through,
+					ddir, rt, spec_class, spec_index, INVALID_STATION, adjacent).Succeeded();
+		} else {
+			return Command<CMD_BUILD_ROAD_STOP>::Post(err_msg, CcRoadStop, ta.tile, ta.w, ta.h, stop_type, drive_through,
+					ddir, rt, spec_class, spec_index, to_join, adjacent);
+		}
+	};
+
+	ShowSelectStationIfNeeded(ta, proc);
+}
+
+/**
+ * Place a road waypoint.
+ * @param tile Position to start dragging a waypoint.
+ */
+static void PlaceRoad_Waypoint(TileIndex tile)
+{
+	if (_remove_button_clicked) {
+		VpStartPlaceSizing(tile, VPM_X_AND_Y, DDSP_REMOVE_ROAD_WAYPOINT);
+		return;
+	}
+
+	Axis axis = GetAxisForNewRoadWaypoint(tile);
+	if (IsValidAxis(axis)) {
+		/* Valid tile for waypoints */
+		VpStartPlaceSizing(tile, axis == AXIS_X ? VPM_X_LIMITED : VPM_Y_LIMITED, DDSP_BUILD_ROAD_WAYPOINT);
+		VpSetPlaceSizingLimit(_settings_game.station.station_spread);
+	} else {
+		/* Tile where we can't build road waypoints. This is always going to fail,
+		 * but provides the user with a proper error message. */
+		Command<CMD_BUILD_ROAD_WAYPOINT>::Post(STR_ERROR_CAN_T_BUILD_ROAD_WAYPOINT, tile, AXIS_X, 1, 1, ROADSTOP_CLASS_WAYP, 0, INVALID_STATION, false);
+	}
 }
 
 /**
@@ -205,8 +279,8 @@ static void PlaceRoad_BusStation(TileIndex tile)
 	if (_remove_button_clicked) {
 		VpStartPlaceSizing(tile, VPM_X_AND_Y, DDSP_REMOVE_BUSSTOP);
 	} else {
-		if (_road_station_picker_orientation < DIAGDIR_END) { // Not a drive-through stop.
-			VpStartPlaceSizing(tile, (DiagDirToAxis(_road_station_picker_orientation) == AXIS_X) ? VPM_X_LIMITED : VPM_Y_LIMITED, DDSP_BUILD_BUSSTOP);
+		if (_roadstop_gui.orientation < DIAGDIR_END) { // Not a drive-through stop.
+			VpStartPlaceSizing(tile, (DiagDirToAxis(_roadstop_gui.orientation) == AXIS_X) ? VPM_X_LIMITED : VPM_Y_LIMITED, DDSP_BUILD_BUSSTOP);
 		} else {
 			VpStartPlaceSizing(tile, VPM_X_AND_Y_LIMITED, DDSP_BUILD_BUSSTOP);
 		}
@@ -223,8 +297,8 @@ static void PlaceRoad_TruckStation(TileIndex tile)
 	if (_remove_button_clicked) {
 		VpStartPlaceSizing(tile, VPM_X_AND_Y, DDSP_REMOVE_TRUCKSTOP);
 	} else {
-		if (_road_station_picker_orientation < DIAGDIR_END) { // Not a drive-through stop.
-			VpStartPlaceSizing(tile, (DiagDirToAxis(_road_station_picker_orientation) == AXIS_X) ? VPM_X_LIMITED : VPM_Y_LIMITED, DDSP_BUILD_TRUCKSTOP);
+		if (_roadstop_gui.orientation < DIAGDIR_END) { // Not a drive-through stop.
+			VpStartPlaceSizing(tile, (DiagDirToAxis(_roadstop_gui.orientation) == AXIS_X) ? VPM_X_LIMITED : VPM_Y_LIMITED, DDSP_BUILD_TRUCKSTOP);
 		} else {
 			VpStartPlaceSizing(tile, VPM_X_AND_Y_LIMITED, DDSP_BUILD_TRUCKSTOP);
 		}
@@ -256,7 +330,7 @@ static bool RoadToolbar_CtrlChanged(Window *w)
 	if (w->IsWidgetDisabled(WID_ROT_REMOVE)) return false;
 
 	/* allow ctrl to switch remove mode only for these widgets */
-	for (uint i = WID_ROT_ROAD_X; i <= WID_ROT_AUTOROAD; i++) {
+	for (WidgetID i = WID_ROT_ROAD_X; i <= WID_ROT_AUTOROAD; i++) {
 		if (w->IsWidgetLowered(i)) {
 			ToggleRoadButton_Remove(w);
 			return true;
@@ -269,14 +343,13 @@ static bool RoadToolbar_CtrlChanged(Window *w)
 /** Road toolbar window handler. */
 struct BuildRoadToolbarWindow : Window {
 	RoadType roadtype;          ///< Road type to build.
-	const RoadTypeInfo *rti;    ///< Information about current road type
 	int last_started_action;    ///< Last started user action.
 
-	BuildRoadToolbarWindow(WindowDesc *desc, WindowNumber window_number) : Window(desc)
+	BuildRoadToolbarWindow(WindowDesc &desc, WindowNumber window_number) : Window(desc)
 	{
-		this->Initialize(_cur_roadtype);
-		this->InitNested(window_number);
-		this->SetupRoadToolbar();
+		this->roadtype = _cur_roadtype;
+		this->CreateNestedTree();
+		this->FinishInitNested(window_number);
 		this->SetWidgetDisabledState(WID_ROT_REMOVE, true);
 
 		if (RoadTypeIsRoad(this->roadtype)) {
@@ -284,12 +357,12 @@ struct BuildRoadToolbarWindow : Window {
 		}
 
 		this->OnInvalidateData();
-		this->last_started_action = WIDGET_LIST_END;
+		this->last_started_action = INVALID_WID_ROT;
 
 		if (_settings_client.gui.link_terraform_toolbar) ShowTerraformToolbar(this);
 	}
 
-	void Close() override
+	void Close([[maybe_unused]] int data = 0) override
 	{
 		if (_game_mode == GM_NORMAL && (this->IsWidgetLowered(WID_ROT_BUS_STATION) || this->IsWidgetLowered(WID_ROT_TRUCK_STATION))) SetViewportCatchmentStation(nullptr, true);
 		if (_settings_client.gui.link_terraform_toolbar) CloseWindowById(WC_SCEN_LAND_GEN, 0, false);
@@ -301,58 +374,59 @@ struct BuildRoadToolbarWindow : Window {
 	 * @param data Information about the changed data.
 	 * @param gui_scope Whether the call is done from GUI scope. You may not do everything when not in GUI scope. See #InvalidateWindowData() for details.
 	 */
-	void OnInvalidateData(int data = 0, bool gui_scope = true) override
+	void OnInvalidateData([[maybe_unused]] int data = 0, [[maybe_unused]] bool gui_scope = true) override
 	{
 		if (!gui_scope) return;
+
+		if (!ValParamRoadType(this->roadtype)) {
+			/* Close toolbar if road type is not available. */
+			this->Close();
+			return;
+		}
+
 		RoadTramType rtt = GetRoadTramType(this->roadtype);
 
 		bool can_build = CanBuildVehicleInfrastructure(VEH_ROAD, rtt);
 		this->SetWidgetsDisabledState(!can_build,
 			WID_ROT_DEPOT,
+			WID_ROT_BUILD_WAYPOINT,
 			WID_ROT_BUS_STATION,
-			WID_ROT_TRUCK_STATION,
-			WIDGET_LIST_END);
+			WID_ROT_TRUCK_STATION);
 		if (!can_build) {
 			CloseWindowById(WC_BUS_STATION, TRANSPORT_ROAD);
 			CloseWindowById(WC_TRUCK_STATION, TRANSPORT_ROAD);
 			CloseWindowById(WC_BUILD_DEPOT, TRANSPORT_ROAD);
+			CloseWindowById(WC_BUILD_WAYPOINT, TRANSPORT_ROAD);
 		}
 
 		if (_game_mode != GM_EDITOR) {
 			if (!can_build) {
 				/* Show in the tooltip why this button is disabled. */
 				this->GetWidget<NWidgetCore>(WID_ROT_DEPOT)->SetToolTip(STR_TOOLBAR_DISABLED_NO_VEHICLE_AVAILABLE);
+				this->GetWidget<NWidgetCore>(WID_ROT_BUILD_WAYPOINT)->SetToolTip(STR_TOOLBAR_DISABLED_NO_VEHICLE_AVAILABLE);
 				this->GetWidget<NWidgetCore>(WID_ROT_BUS_STATION)->SetToolTip(STR_TOOLBAR_DISABLED_NO_VEHICLE_AVAILABLE);
 				this->GetWidget<NWidgetCore>(WID_ROT_TRUCK_STATION)->SetToolTip(STR_TOOLBAR_DISABLED_NO_VEHICLE_AVAILABLE);
 			} else {
 				this->GetWidget<NWidgetCore>(WID_ROT_DEPOT)->SetToolTip(rtt == RTT_ROAD ? STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_VEHICLE_DEPOT : STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAM_VEHICLE_DEPOT);
+				this->GetWidget<NWidgetCore>(WID_ROT_BUILD_WAYPOINT)->SetToolTip(rtt == RTT_ROAD ? STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_ROAD_TO_WAYPOINT : STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_TRAM_TO_WAYPOINT);
 				this->GetWidget<NWidgetCore>(WID_ROT_BUS_STATION)->SetToolTip(rtt == RTT_ROAD ? STR_ROAD_TOOLBAR_TOOLTIP_BUILD_BUS_STATION : STR_ROAD_TOOLBAR_TOOLTIP_BUILD_PASSENGER_TRAM_STATION);
 				this->GetWidget<NWidgetCore>(WID_ROT_TRUCK_STATION)->SetToolTip(rtt == RTT_ROAD ? STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRUCK_LOADING_BAY : STR_ROAD_TOOLBAR_TOOLTIP_BUILD_CARGO_TRAM_STATION);
 			}
 		}
 	}
 
-	void Initialize(RoadType roadtype)
+	void OnInit() override
 	{
-		assert(roadtype < ROADTYPE_END);
-		this->roadtype = roadtype;
-		this->rti = GetRoadTypeInfo(this->roadtype);
-	}
-
-	/**
-	 * Configures the road toolbar for roadtype given
-	 * @param roadtype the roadtype to display
-	 */
-	void SetupRoadToolbar()
-	{
-		this->GetWidget<NWidgetCore>(WID_ROT_ROAD_X)->widget_data = rti->gui_sprites.build_x_road;
-		this->GetWidget<NWidgetCore>(WID_ROT_ROAD_Y)->widget_data = rti->gui_sprites.build_y_road;
-		this->GetWidget<NWidgetCore>(WID_ROT_AUTOROAD)->widget_data = rti->gui_sprites.auto_road;
+		/* Configure the road toolbar for the roadtype. */
+		const RoadTypeInfo *rti = GetRoadTypeInfo(this->roadtype);
+		this->GetWidget<NWidgetCore>(WID_ROT_ROAD_X)->SetSprite(rti->gui_sprites.build_x_road);
+		this->GetWidget<NWidgetCore>(WID_ROT_ROAD_Y)->SetSprite(rti->gui_sprites.build_y_road);
+		this->GetWidget<NWidgetCore>(WID_ROT_AUTOROAD)->SetSprite(rti->gui_sprites.auto_road);
 		if (_game_mode != GM_EDITOR) {
-			this->GetWidget<NWidgetCore>(WID_ROT_DEPOT)->widget_data = rti->gui_sprites.build_depot;
+			this->GetWidget<NWidgetCore>(WID_ROT_DEPOT)->SetSprite(rti->gui_sprites.build_depot);
 		}
-		this->GetWidget<NWidgetCore>(WID_ROT_CONVERT_ROAD)->widget_data = rti->gui_sprites.convert_road;
-		this->GetWidget<NWidgetCore>(WID_ROT_BUILD_TUNNEL)->widget_data = rti->gui_sprites.build_tunnel;
+		this->GetWidget<NWidgetCore>(WID_ROT_CONVERT_ROAD)->SetSprite(rti->gui_sprites.convert_road);
+		this->GetWidget<NWidgetCore>(WID_ROT_BUILD_TUNNEL)->SetSprite(rti->gui_sprites.build_tunnel);
 	}
 
 	/**
@@ -361,20 +435,20 @@ struct BuildRoadToolbarWindow : Window {
 	 */
 	void ModifyRoadType(RoadType roadtype)
 	{
-		this->Initialize(roadtype);
-		this->SetupRoadToolbar();
+		this->roadtype = roadtype;
 		this->ReInit();
 	}
 
-	void SetStringParameters(int widget) const override
+	void SetStringParameters(WidgetID widget) const override
 	{
 		if (widget == WID_ROT_CAPTION) {
-			if (this->rti->max_speed > 0) {
+			const RoadTypeInfo *rti = GetRoadTypeInfo(this->roadtype);
+			if (rti->max_speed > 0) {
 				SetDParam(0, STR_TOOLBAR_RAILTYPE_VELOCITY);
-				SetDParam(1, this->rti->strings.toolbar_caption);
-				SetDParam(2, this->rti->max_speed / 2);
+				SetDParam(1, rti->strings.toolbar_caption);
+				SetDParam(2, PackVelocity(rti->max_speed / 2, VEH_ROAD));
 			} else {
-				SetDParam(0, this->rti->strings.toolbar_caption);
+				SetDParam(0, rti->strings.toolbar_caption);
 			}
 		}
 	}
@@ -405,6 +479,7 @@ struct BuildRoadToolbarWindow : Window {
 
 			case WID_ROT_BUS_STATION:
 			case WID_ROT_TRUCK_STATION:
+			case WID_ROT_BUILD_WAYPOINT:
 				if (RoadTypeIsRoad(this->roadtype)) this->DisableWidget(WID_ROT_ONE_WAY);
 				this->SetWidgetDisabledState(WID_ROT_REMOVE, !this->IsWidgetLowered(clicked_widget));
 				break;
@@ -433,23 +508,23 @@ struct BuildRoadToolbarWindow : Window {
 		}
 	}
 
-	void OnClick(Point pt, int widget, int click_count) override
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
 	{
 		_remove_button_clicked = false;
 		_one_way_button_clicked = false;
 		switch (widget) {
 			case WID_ROT_ROAD_X:
-				HandlePlacePushButton(this, WID_ROT_ROAD_X, this->rti->cursor.road_nwse, HT_RECT);
+				HandlePlacePushButton(this, WID_ROT_ROAD_X, GetRoadTypeInfo(this->roadtype)->cursor.road_nwse, HT_RECT);
 				this->last_started_action = widget;
 				break;
 
 			case WID_ROT_ROAD_Y:
-				HandlePlacePushButton(this, WID_ROT_ROAD_Y, this->rti->cursor.road_swne, HT_RECT);
+				HandlePlacePushButton(this, WID_ROT_ROAD_Y, GetRoadTypeInfo(this->roadtype)->cursor.road_swne, HT_RECT);
 				this->last_started_action = widget;
 				break;
 
 			case WID_ROT_AUTOROAD:
-				HandlePlacePushButton(this, WID_ROT_AUTOROAD, this->rti->cursor.autoroad, HT_RECT);
+				HandlePlacePushButton(this, WID_ROT_AUTOROAD, GetRoadTypeInfo(this->roadtype)->cursor.autoroad, HT_RECT);
 				this->last_started_action = widget;
 				break;
 
@@ -459,22 +534,29 @@ struct BuildRoadToolbarWindow : Window {
 				break;
 
 			case WID_ROT_DEPOT:
-				if (HandlePlacePushButton(this, WID_ROT_DEPOT, this->rti->cursor.depot, HT_RECT)) {
+				if (HandlePlacePushButton(this, WID_ROT_DEPOT, GetRoadTypeInfo(this->roadtype)->cursor.depot, HT_RECT)) {
 					ShowRoadDepotPicker(this);
 					this->last_started_action = widget;
 				}
 				break;
 
+			case WID_ROT_BUILD_WAYPOINT:
+				this->last_started_action = widget;
+				if (HandlePlacePushButton(this, WID_ROT_BUILD_WAYPOINT, SPR_CURSOR_WAYPOINT, HT_RECT)) {
+					ShowBuildRoadWaypointPicker(this);
+				}
+				break;
+
 			case WID_ROT_BUS_STATION:
 				if (HandlePlacePushButton(this, WID_ROT_BUS_STATION, SPR_CURSOR_BUS_STATION, HT_RECT)) {
-					ShowRVStationPicker(this, ROADSTOP_BUS);
+					ShowRVStationPicker(this, RoadStopType::Bus);
 					this->last_started_action = widget;
 				}
 				break;
 
 			case WID_ROT_TRUCK_STATION:
 				if (HandlePlacePushButton(this, WID_ROT_TRUCK_STATION, SPR_CURSOR_TRUCK_STATION, HT_RECT)) {
-					ShowRVStationPicker(this, ROADSTOP_TRUCK);
+					ShowRVStationPicker(this, RoadStopType::Truck);
 					this->last_started_action = widget;
 				}
 				break;
@@ -492,7 +574,7 @@ struct BuildRoadToolbarWindow : Window {
 				break;
 
 			case WID_ROT_BUILD_TUNNEL:
-				HandlePlacePushButton(this, WID_ROT_BUILD_TUNNEL, this->rti->cursor.tunnel, HT_SPECIAL);
+				HandlePlacePushButton(this, WID_ROT_BUILD_TUNNEL, GetRoadTypeInfo(this->roadtype)->cursor.tunnel, HT_SPECIAL);
 				this->last_started_action = widget;
 				break;
 
@@ -505,7 +587,7 @@ struct BuildRoadToolbarWindow : Window {
 				break;
 
 			case WID_ROT_CONVERT_ROAD:
-				HandlePlacePushButton(this, WID_ROT_CONVERT_ROAD, this->rti->cursor.convert_road, HT_RECT);
+				HandlePlacePushButton(this, WID_ROT_CONVERT_ROAD, GetRoadTypeInfo(this->roadtype)->cursor.convert_road, HT_RECT);
 				this->last_started_action = widget;
 				break;
 
@@ -521,27 +603,27 @@ struct BuildRoadToolbarWindow : Window {
 		return Window::OnHotkey(hotkey);
 	}
 
-	void OnPlaceObject(Point pt, TileIndex tile) override
+	void OnPlaceObject([[maybe_unused]] Point pt, TileIndex tile) override
 	{
 		_remove_button_clicked = this->IsWidgetLowered(WID_ROT_REMOVE);
 		_one_way_button_clicked = RoadTypeIsRoad(this->roadtype) ? this->IsWidgetLowered(WID_ROT_ONE_WAY) : false;
 		switch (this->last_started_action) {
 			case WID_ROT_ROAD_X:
-				_place_road_flag = RF_DIR_X;
-				if (_tile_fract_coords.x >= 8) _place_road_flag |= RF_START_HALFROAD_X;
+				_place_road_dir = AXIS_X;
+				_place_road_start_half_x = _tile_fract_coords.x >= 8;
 				VpStartPlaceSizing(tile, VPM_FIX_Y, DDSP_PLACE_ROAD_X_DIR);
 				break;
 
 			case WID_ROT_ROAD_Y:
-				_place_road_flag = RF_DIR_Y;
-				if (_tile_fract_coords.y >= 8) _place_road_flag |= RF_START_HALFROAD_Y;
+				_place_road_dir = AXIS_Y;
+				_place_road_start_half_y = _tile_fract_coords.y >= 8;
 				VpStartPlaceSizing(tile, VPM_FIX_X, DDSP_PLACE_ROAD_Y_DIR);
 				break;
 
 			case WID_ROT_AUTOROAD:
-				_place_road_flag = RF_NONE;
-				if (_tile_fract_coords.x >= 8) _place_road_flag |= RF_START_HALFROAD_X;
-				if (_tile_fract_coords.y >= 8) _place_road_flag |= RF_START_HALFROAD_Y;
+				_place_road_dir = INVALID_AXIS;
+				_place_road_start_half_x = _tile_fract_coords.x >= 8;
+				_place_road_start_half_y = _tile_fract_coords.y >= 8;
 				VpStartPlaceSizing(tile, VPM_X_OR_Y, DDSP_PLACE_AUTOROAD);
 				break;
 
@@ -550,8 +632,12 @@ struct BuildRoadToolbarWindow : Window {
 				break;
 
 			case WID_ROT_DEPOT:
-				DoCommandP(tile, _cur_roadtype << 2 | _road_depot_orientation, 0,
-						CMD_BUILD_ROAD_DEPOT | CMD_MSG(this->rti->strings.err_depot), CcRoadDepot);
+				Command<CMD_BUILD_ROAD_DEPOT>::Post(GetRoadTypeInfo(this->roadtype)->strings.err_depot, CcRoadDepot,
+						tile, _cur_roadtype, _road_depot_orientation);
+				break;
+
+			case WID_ROT_BUILD_WAYPOINT:
+				PlaceRoad_Waypoint(tile);
 				break;
 
 			case WID_ROT_BUS_STATION:
@@ -567,8 +653,8 @@ struct BuildRoadToolbarWindow : Window {
 				break;
 
 			case WID_ROT_BUILD_TUNNEL:
-				DoCommandP(tile, _cur_roadtype | (TRANSPORT_ROAD << 8), 0,
-						CMD_BUILD_TUNNEL | CMD_MSG(STR_ERROR_CAN_T_BUILD_TUNNEL_HERE), CcBuildRoadTunnel);
+				Command<CMD_BUILD_TUNNEL>::Post(STR_ERROR_CAN_T_BUILD_TUNNEL_HERE, CcBuildRoadTunnel,
+						tile, TRANSPORT_ROAD, _cur_roadtype);
 				break;
 
 			case WID_ROT_CONVERT_ROAD:
@@ -595,11 +681,12 @@ struct BuildRoadToolbarWindow : Window {
 		CloseWindowById(WC_BUS_STATION, TRANSPORT_ROAD);
 		CloseWindowById(WC_TRUCK_STATION, TRANSPORT_ROAD);
 		CloseWindowById(WC_BUILD_DEPOT, TRANSPORT_ROAD);
+		CloseWindowById(WC_BUILD_WAYPOINT, TRANSPORT_ROAD);
 		CloseWindowById(WC_SELECT_STATION, 0);
 		CloseWindowByClass(WC_BUILD_BRIDGE);
 	}
 
-	void OnPlaceDrag(ViewportPlaceMethod select_method, ViewportDragDropSelectionProcess select_proc, Point pt) override
+	void OnPlaceDrag(ViewportPlaceMethod select_method, [[maybe_unused]] ViewportDragDropSelectionProcess select_proc, [[maybe_unused]] Point pt) override
 	{
 		/* Here we update the end tile flags
 		 * of the road placement actions.
@@ -607,30 +694,26 @@ struct BuildRoadToolbarWindow : Window {
 		 * bits and if needed we set them again. */
 		switch (select_proc) {
 			case DDSP_PLACE_ROAD_X_DIR:
-				_place_road_flag &= ~RF_END_HALFROAD_X;
-				if (pt.x & 8) _place_road_flag |= RF_END_HALFROAD_X;
+				_place_road_end_half = pt.x & 8;
 				break;
 
 			case DDSP_PLACE_ROAD_Y_DIR:
-				_place_road_flag &= ~RF_END_HALFROAD_Y;
-				if (pt.y & 8) _place_road_flag |= RF_END_HALFROAD_Y;
+				_place_road_end_half = pt.y & 8;
 				break;
 
 			case DDSP_PLACE_AUTOROAD:
-				_place_road_flag &= ~(RF_END_HALFROAD_Y | RF_END_HALFROAD_X);
-				if (pt.y & 8) _place_road_flag |= RF_END_HALFROAD_Y;
-				if (pt.x & 8) _place_road_flag |= RF_END_HALFROAD_X;
-
 				/* For autoroad we need to update the
 				 * direction of the road */
 				if (_thd.size.x > _thd.size.y || (_thd.size.x == _thd.size.y &&
 						( (_tile_fract_coords.x < _tile_fract_coords.y && (_tile_fract_coords.x + _tile_fract_coords.y) < 16) ||
 						(_tile_fract_coords.x > _tile_fract_coords.y && (_tile_fract_coords.x + _tile_fract_coords.y) > 16) ))) {
 					/* Set dir = X */
-					_place_road_flag &= ~RF_DIR_Y;
+					_place_road_dir = AXIS_X;
+					_place_road_end_half = pt.x & 8;
 				} else {
 					/* Set dir = Y */
-					_place_road_flag |= RF_DIR_Y;
+					_place_road_dir = AXIS_Y;
+					_place_road_end_half = pt.y & 8;
 				}
 
 				break;
@@ -642,7 +725,7 @@ struct BuildRoadToolbarWindow : Window {
 		VpSelectTilesWithMethod(pt.x, pt.y, select_method);
 	}
 
-	void OnPlaceMouseUp(ViewportPlaceMethod select_method, ViewportDragDropSelectionProcess select_proc, Point pt, TileIndex start_tile, TileIndex end_tile) override
+	void OnPlaceMouseUp([[maybe_unused]] ViewportPlaceMethod select_method, ViewportDragDropSelectionProcess select_proc, [[maybe_unused]] Point pt, TileIndex start_tile, TileIndex end_tile) override
 	{
 		if (pt.x != -1) {
 			switch (select_proc) {
@@ -658,57 +741,80 @@ struct BuildRoadToolbarWindow : Window {
 
 				case DDSP_PLACE_ROAD_X_DIR:
 				case DDSP_PLACE_ROAD_Y_DIR:
-				case DDSP_PLACE_AUTOROAD:
-					/* Flag description:
-					 * Use the first three bits (0x07) if dir == Y
-					 * else use the last 2 bits (X dir has
-					 * not the 3rd bit set) */
+				case DDSP_PLACE_AUTOROAD: {
+					bool start_half = _place_road_dir == AXIS_Y ? _place_road_start_half_y : _place_road_start_half_x;
 
-					/* Even if _cur_roadtype_id is a uint8 we only use 5 bits so
-					 * we could ignore the last 3 bits and reuse them for other
-					 * flags */
-					_place_road_flag = (RoadFlags)((_place_road_flag & RF_DIR_Y) ? (_place_road_flag & 0x07) : (_place_road_flag >> 3));
+					if (_remove_button_clicked) {
+						Command<CMD_REMOVE_LONG_ROAD>::Post(GetRoadTypeInfo(this->roadtype)->strings.err_remove_road, CcPlaySound_CONSTRUCTION_OTHER,
+								end_tile, start_tile, _cur_roadtype, _place_road_dir, start_half, _place_road_end_half);
+					} else {
+						Command<CMD_BUILD_LONG_ROAD>::Post(GetRoadTypeInfo(this->roadtype)->strings.err_build_road, CcPlaySound_CONSTRUCTION_OTHER,
+								end_tile, start_tile, _cur_roadtype, _place_road_dir, _one_way_button_clicked ? DRD_NORTHBOUND : DRD_NONE, start_half, _place_road_end_half, false);
+					}
+					break;
+				}
 
-					DoCommandP(start_tile, end_tile, _place_road_flag | (_cur_roadtype << 3) | (_one_way_button_clicked << 10),
-							_remove_button_clicked ?
-							CMD_REMOVE_LONG_ROAD | CMD_MSG(this->rti->strings.err_remove_road) :
-							CMD_BUILD_LONG_ROAD | CMD_MSG(this->rti->strings.err_build_road), CcPlaySound_CONSTRUCTION_OTHER);
+				case DDSP_BUILD_ROAD_WAYPOINT:
+				case DDSP_REMOVE_ROAD_WAYPOINT:
+					if (this->IsWidgetLowered(WID_ROT_BUILD_WAYPOINT)) {
+						if (_remove_button_clicked) {
+							Command<CMD_REMOVE_FROM_ROAD_WAYPOINT>::Post(STR_ERROR_CAN_T_REMOVE_ROAD_WAYPOINT, CcPlaySound_CONSTRUCTION_OTHER, end_tile, start_tile);
+						} else {
+							TileArea ta(start_tile, end_tile);
+							Axis axis = select_method == VPM_X_LIMITED ? AXIS_X : AXIS_Y;
+							bool adjacent = _ctrl_pressed;
+
+							auto proc = [=](bool test, StationID to_join) -> bool {
+								if (test) {
+									return Command<CMD_BUILD_ROAD_WAYPOINT>::Do(CommandFlagsToDCFlags(GetCommandFlags<CMD_BUILD_ROAD_WAYPOINT>()), ta.tile, axis, ta.w, ta.h, _waypoint_gui.sel_class, _waypoint_gui.sel_type, INVALID_STATION, adjacent).Succeeded();
+								} else {
+									return Command<CMD_BUILD_ROAD_WAYPOINT>::Post(STR_ERROR_CAN_T_BUILD_ROAD_WAYPOINT, CcPlaySound_CONSTRUCTION_OTHER, ta.tile, axis, ta.w, ta.h, _waypoint_gui.sel_class, _waypoint_gui.sel_type, to_join, adjacent);
+								}
+							};
+
+							ShowSelectRoadWaypointIfNeeded(ta, proc);
+						}
+					}
 					break;
 
 				case DDSP_BUILD_BUSSTOP:
 				case DDSP_REMOVE_BUSSTOP:
-					if (this->IsWidgetLowered(WID_ROT_BUS_STATION)) {
+					if (this->IsWidgetLowered(WID_ROT_BUS_STATION) && GetIfClassHasNewStopsByType(RoadStopClass::Get(_roadstop_gui.sel_class), RoadStopType::Bus, _cur_roadtype)) {
 						if (_remove_button_clicked) {
 							TileArea ta(start_tile, end_tile);
-							DoCommandP(ta.tile, ta.w | ta.h << 8, (_ctrl_pressed << 1) | ROADSTOP_BUS, CMD_REMOVE_ROAD_STOP | CMD_MSG(this->rti->strings.err_remove_station[ROADSTOP_BUS]), CcPlaySound_CONSTRUCTION_OTHER);
+							StringID str = GetRoadTypeInfo(this->roadtype)->strings.err_remove_station[to_underlying(RoadStopType::Bus)];
+							Command<CMD_REMOVE_ROAD_STOP>::Post(str, CcPlaySound_CONSTRUCTION_OTHER, ta.tile, ta.w, ta.h, RoadStopType::Bus, _ctrl_pressed);
 						} else {
-							PlaceRoadStop(start_tile, end_tile, _cur_roadtype << 5 | (_ctrl_pressed << 2) | ROADSTOP_BUS, CMD_BUILD_ROAD_STOP | CMD_MSG(this->rti->strings.err_build_station[ROADSTOP_BUS]));
+							StringID str = GetRoadTypeInfo(this->roadtype)->strings.err_build_station[to_underlying(RoadStopType::Bus)];
+							PlaceRoadStop(start_tile, end_tile, RoadStopType::Bus, _ctrl_pressed, _cur_roadtype, str);
 						}
 					}
 					break;
 
 				case DDSP_BUILD_TRUCKSTOP:
 				case DDSP_REMOVE_TRUCKSTOP:
-					if (this->IsWidgetLowered(WID_ROT_TRUCK_STATION)) {
+					if (this->IsWidgetLowered(WID_ROT_TRUCK_STATION) && GetIfClassHasNewStopsByType(RoadStopClass::Get(_roadstop_gui.sel_class), RoadStopType::Truck, _cur_roadtype)) {
 						if (_remove_button_clicked) {
 							TileArea ta(start_tile, end_tile);
-							DoCommandP(ta.tile, ta.w | ta.h << 8, (_ctrl_pressed << 1) | ROADSTOP_TRUCK, CMD_REMOVE_ROAD_STOP | CMD_MSG(this->rti->strings.err_remove_station[ROADSTOP_TRUCK]), CcPlaySound_CONSTRUCTION_OTHER);
+							StringID str = GetRoadTypeInfo(this->roadtype)->strings.err_remove_station[to_underlying(RoadStopType::Truck)];
+							Command<CMD_REMOVE_ROAD_STOP>::Post(str, CcPlaySound_CONSTRUCTION_OTHER, ta.tile, ta.w, ta.h, RoadStopType::Truck, _ctrl_pressed);
 						} else {
-							PlaceRoadStop(start_tile, end_tile, _cur_roadtype << 5 | (_ctrl_pressed << 2) | ROADSTOP_TRUCK, CMD_BUILD_ROAD_STOP | CMD_MSG(this->rti->strings.err_build_station[ROADSTOP_TRUCK]));
+							StringID str = GetRoadTypeInfo(this->roadtype)->strings.err_build_station[to_underlying(RoadStopType::Truck)];
+							PlaceRoadStop(start_tile, end_tile, RoadStopType::Truck, _ctrl_pressed, _cur_roadtype, str);
 						}
 					}
 					break;
 
 				case DDSP_CONVERT_ROAD:
-					DoCommandP(end_tile, start_tile, _cur_roadtype, CMD_CONVERT_ROAD | CMD_MSG(rti->strings.err_convert_road), CcPlaySound_CONSTRUCTION_OTHER);
+					Command<CMD_CONVERT_ROAD>::Post(GetRoadTypeInfo(this->roadtype)->strings.err_convert_road, CcPlaySound_CONSTRUCTION_OTHER, end_tile, start_tile, _cur_roadtype);
 					break;
 			}
 		}
 	}
 
-	void OnPlacePresize(Point pt, TileIndex tile) override
+	void OnPlacePresize([[maybe_unused]] Point pt, TileIndex tile) override
 	{
-		DoCommand(tile, _cur_roadtype | (TRANSPORT_ROAD << 8), 0, DC_AUTO, CMD_BUILD_TUNNEL);
+		Command<CMD_BUILD_TUNNEL>::Do(DC_AUTO, tile, TRANSPORT_ROAD, _cur_roadtype);
 		VpSetPresizeRange(tile, _build_tunnel_endtile == 0 ? tile : _build_tunnel_endtile);
 	}
 
@@ -718,164 +824,167 @@ struct BuildRoadToolbarWindow : Window {
 		return ES_NOT_HANDLED;
 	}
 
-	static HotkeyList road_hotkeys;
-	static HotkeyList tram_hotkeys;
-};
-
-/**
- * Handler for global hotkeys of the BuildRoadToolbarWindow.
- * @param hotkey Hotkey
- * @param last_build Last build road type
- * @return ES_HANDLED if hotkey was accepted.
- */
-static EventState RoadTramToolbarGlobalHotkeys(int hotkey, RoadType last_build, RoadTramType rtt)
-{
-	Window* w = nullptr;
-	switch (_game_mode) {
-		case GM_NORMAL:
-			w = ShowBuildRoadToolbar(last_build);
-			break;
-
-		case GM_EDITOR:
-			if ((GetRoadTypes(true) & ((rtt == RTT_ROAD) ? ~_roadtypes_type : _roadtypes_type)) == ROADTYPES_NONE) return ES_NOT_HANDLED;
-			w = ShowBuildRoadScenToolbar(last_build);
-			break;
-
-		default:
-			break;
+	void OnRealtimeTick([[maybe_unused]] uint delta_ms) override
+	{
+		if (_game_mode == GM_NORMAL && this->IsWidgetLowered(WID_ROT_BUILD_WAYPOINT)) CheckRedrawRoadWaypointCoverage(this);
 	}
 
-	if (w == nullptr) return ES_NOT_HANDLED;
-	return w->OnHotkey(hotkey);
-}
+	/**
+	 * Handler for global hotkeys of the BuildRoadToolbarWindow.
+	 * @param hotkey Hotkey
+	 * @param last_build Last build road type
+	 * @return ES_HANDLED if hotkey was accepted.
+	 */
+	static EventState RoadTramToolbarGlobalHotkeys(int hotkey, RoadType last_build, RoadTramType rtt)
+	{
+		Window *w = nullptr;
+		switch (_game_mode) {
+			case GM_NORMAL:
+				w = ShowBuildRoadToolbar(last_build);
+				break;
 
-static EventState RoadToolbarGlobalHotkeys(int hotkey)
-{
-	extern RoadType _last_built_roadtype;
-	return RoadTramToolbarGlobalHotkeys(hotkey, _last_built_roadtype, RTT_ROAD);
-}
+			case GM_EDITOR:
+				if ((GetRoadTypes(true) & ((rtt == RTT_ROAD) ? ~_roadtypes_type : _roadtypes_type)) == ROADTYPES_NONE) return ES_NOT_HANDLED;
+				w = ShowBuildRoadScenToolbar(last_build);
+				break;
 
-static EventState TramToolbarGlobalHotkeys(int hotkey)
-{
-	extern RoadType _last_built_tramtype;
-	return RoadTramToolbarGlobalHotkeys(hotkey, _last_built_tramtype, RTT_TRAM);
-}
+			default:
+				break;
+		}
 
-static Hotkey roadtoolbar_hotkeys[] = {
-	Hotkey('1', "build_x", WID_ROT_ROAD_X),
-	Hotkey('2', "build_y", WID_ROT_ROAD_Y),
-	Hotkey('3', "autoroad", WID_ROT_AUTOROAD),
-	Hotkey('4', "demolish", WID_ROT_DEMOLISH),
-	Hotkey('5', "depot", WID_ROT_DEPOT),
-	Hotkey('6', "bus_station", WID_ROT_BUS_STATION),
-	Hotkey('7', "truck_station", WID_ROT_TRUCK_STATION),
-	Hotkey('8', "oneway", WID_ROT_ONE_WAY),
-	Hotkey('B', "bridge", WID_ROT_BUILD_BRIDGE),
-	Hotkey('T', "tunnel", WID_ROT_BUILD_TUNNEL),
-	Hotkey('R', "remove", WID_ROT_REMOVE),
-	Hotkey('C', "convert", WID_ROT_CONVERT_ROAD),
-	HOTKEY_LIST_END
+		if (w == nullptr) return ES_NOT_HANDLED;
+		return w->OnHotkey(hotkey);
+	}
+
+	static EventState RoadToolbarGlobalHotkeys(int hotkey)
+	{
+		extern RoadType _last_built_roadtype;
+		return RoadTramToolbarGlobalHotkeys(hotkey, _last_built_roadtype, RTT_ROAD);
+	}
+
+	static EventState TramToolbarGlobalHotkeys(int hotkey)
+	{
+		extern RoadType _last_built_tramtype;
+		return RoadTramToolbarGlobalHotkeys(hotkey, _last_built_tramtype, RTT_TRAM);
+	}
+
+	static inline HotkeyList road_hotkeys{"roadtoolbar", {
+		Hotkey('1', "build_x", WID_ROT_ROAD_X),
+		Hotkey('2', "build_y", WID_ROT_ROAD_Y),
+		Hotkey('3', "autoroad", WID_ROT_AUTOROAD),
+		Hotkey('4', "demolish", WID_ROT_DEMOLISH),
+		Hotkey('5', "depot", WID_ROT_DEPOT),
+		Hotkey('6', "bus_station", WID_ROT_BUS_STATION),
+		Hotkey('7', "truck_station", WID_ROT_TRUCK_STATION),
+		Hotkey('8', "oneway", WID_ROT_ONE_WAY),
+		Hotkey('9', "waypoint", WID_ROT_BUILD_WAYPOINT),
+		Hotkey('B', "bridge", WID_ROT_BUILD_BRIDGE),
+		Hotkey('T', "tunnel", WID_ROT_BUILD_TUNNEL),
+		Hotkey('R', "remove", WID_ROT_REMOVE),
+		Hotkey('C', "convert", WID_ROT_CONVERT_ROAD),
+	}, RoadToolbarGlobalHotkeys};
+
+	static inline HotkeyList tram_hotkeys{"tramtoolbar", {
+		Hotkey('1', "build_x", WID_ROT_ROAD_X),
+		Hotkey('2', "build_y", WID_ROT_ROAD_Y),
+		Hotkey('3', "autoroad", WID_ROT_AUTOROAD),
+		Hotkey('4', "demolish", WID_ROT_DEMOLISH),
+		Hotkey('5', "depot", WID_ROT_DEPOT),
+		Hotkey('6', "bus_station", WID_ROT_BUS_STATION),
+		Hotkey('7', "truck_station", WID_ROT_TRUCK_STATION),
+		Hotkey('9', "waypoint", WID_ROT_BUILD_WAYPOINT),
+		Hotkey('B', "bridge", WID_ROT_BUILD_BRIDGE),
+		Hotkey('T', "tunnel", WID_ROT_BUILD_TUNNEL),
+		Hotkey('R', "remove", WID_ROT_REMOVE),
+		Hotkey('C', "convert", WID_ROT_CONVERT_ROAD),
+	}, TramToolbarGlobalHotkeys};
 };
-HotkeyList BuildRoadToolbarWindow::road_hotkeys("roadtoolbar", roadtoolbar_hotkeys, RoadToolbarGlobalHotkeys);
 
-static Hotkey tramtoolbar_hotkeys[] = {
-	Hotkey('1', "build_x", WID_ROT_ROAD_X),
-	Hotkey('2', "build_y", WID_ROT_ROAD_Y),
-	Hotkey('3', "autoroad", WID_ROT_AUTOROAD),
-	Hotkey('4', "demolish", WID_ROT_DEMOLISH),
-	Hotkey('5', "depot", WID_ROT_DEPOT),
-	Hotkey('6', "bus_station", WID_ROT_BUS_STATION),
-	Hotkey('7', "truck_station", WID_ROT_TRUCK_STATION),
-	Hotkey('B', "bridge", WID_ROT_BUILD_BRIDGE),
-	Hotkey('T', "tunnel", WID_ROT_BUILD_TUNNEL),
-	Hotkey('R', "remove", WID_ROT_REMOVE),
-	Hotkey('C', "convert", WID_ROT_CONVERT_ROAD),
-	HOTKEY_LIST_END
-};
-HotkeyList BuildRoadToolbarWindow::tram_hotkeys("tramtoolbar", tramtoolbar_hotkeys, TramToolbarGlobalHotkeys);
-
-
-static const NWidgetPart _nested_build_road_widgets[] = {
+static constexpr NWidgetPart _nested_build_road_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
-		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetDataTip(STR_WHITE_STRING, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetStringTip(STR_JUST_STRING2, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS), SetTextStyle(TC_WHITE),
 		NWidget(WWT_STICKYBOX, COLOUR_DARK_GREEN),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_X),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_Y),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_AUTOROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_AUTOROAD, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_AUTOROAD, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOROAD),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_DEMOLISH),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_DEPOT),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_DEPOT, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_VEHICLE_DEPOT),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_DEPOT, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_VEHICLE_DEPOT),
+		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_WAYPOINT),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_WAYPOINT, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_ROAD_TO_WAYPOINT),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUS_STATION),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_BUS_STATION, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_BUS_STATION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_BUS_STATION, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_BUS_STATION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_TRUCK_STATION),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_TRUCK_BAY, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRUCK_LOADING_BAY),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_TRUCK_BAY, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRUCK_LOADING_BAY),
 		NWidget(WWT_PANEL, COLOUR_DARK_GREEN, -1), SetMinimalSize(0, 22), SetFill(1, 1), EndContainer(),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ONE_WAY),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_ONE_WAY, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_ONE_WAY_ROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_ONE_WAY, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_ONE_WAY_ROAD),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_BRIDGE),
-						SetFill(0, 1), SetMinimalSize(43, 22), SetDataTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_BRIDGE),
+						SetFill(0, 1), SetMinimalSize(43, 22), SetSpriteTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_BRIDGE),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_TUNNEL),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_TUNNEL),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_TUNNEL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_REMOVE),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_ROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_ROAD),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_CONVERT_ROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_ROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_ROAD),
 	EndContainer(),
 };
 
 static WindowDesc _build_road_desc(
 	WDP_ALIGN_TOOLBAR, "toolbar_road", 0, 0,
 	WC_BUILD_TOOLBAR, WC_NONE,
-	WDF_CONSTRUCTION,
-	_nested_build_road_widgets, lengthof(_nested_build_road_widgets),
+	WindowDefaultFlag::Construction,
+	_nested_build_road_widgets,
 	&BuildRoadToolbarWindow::road_hotkeys
 );
 
-static const NWidgetPart _nested_build_tramway_widgets[] = {
+static constexpr NWidgetPart _nested_build_tramway_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
-		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetDataTip(STR_WHITE_STRING, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetStringTip(STR_JUST_STRING2, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS), SetTextStyle(TC_WHITE),
 		NWidget(WWT_STICKYBOX, COLOUR_DARK_GREEN),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_X),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_TRAMWAY_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_TRAMWAY_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_Y),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_TRAMWAY_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_TRAMWAY_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_AUTOROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_AUTOTRAM, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOTRAM),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_AUTOTRAM, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOTRAM),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_DEMOLISH),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_DEPOT),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_DEPOT, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAM_VEHICLE_DEPOT),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_DEPOT, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAM_VEHICLE_DEPOT),
+		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_WAYPOINT),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_WAYPOINT, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_TRAM_TO_WAYPOINT),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUS_STATION),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_BUS_STATION, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_PASSENGER_TRAM_STATION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_BUS_STATION, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_PASSENGER_TRAM_STATION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_TRUCK_STATION),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_TRUCK_BAY, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_CARGO_TRAM_STATION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_TRUCK_BAY, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_CARGO_TRAM_STATION),
 		NWidget(WWT_PANEL, COLOUR_DARK_GREEN, -1), SetMinimalSize(0, 22), SetFill(1, 1), EndContainer(),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_BRIDGE),
-						SetFill(0, 1), SetMinimalSize(43, 22), SetDataTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_BRIDGE),
+						SetFill(0, 1), SetMinimalSize(43, 22), SetSpriteTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_BRIDGE),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_TUNNEL),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_TUNNEL),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_TUNNEL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_REMOVE),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_TRAMWAYS),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_TRAMWAYS),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_CONVERT_ROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_TRAM),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_TRAM),
 	EndContainer(),
 };
 
 static WindowDesc _build_tramway_desc(
 	WDP_ALIGN_TOOLBAR, "toolbar_tramway", 0, 0,
 	WC_BUILD_TOOLBAR, WC_NONE,
-	WDF_CONSTRUCTION,
-	_nested_build_tramway_widgets, lengthof(_nested_build_tramway_widgets),
+	WindowDefaultFlag::Construction,
+	_nested_build_tramway_widgets,
 	&BuildRoadToolbarWindow::tram_hotkeys
 );
 
@@ -894,78 +1003,78 @@ Window *ShowBuildRoadToolbar(RoadType roadtype)
 	CloseWindowByClass(WC_BUILD_TOOLBAR);
 	_cur_roadtype = roadtype;
 
-	return AllocateWindowDescFront<BuildRoadToolbarWindow>(RoadTypeIsRoad(_cur_roadtype) ? &_build_road_desc : &_build_tramway_desc, TRANSPORT_ROAD);
+	return AllocateWindowDescFront<BuildRoadToolbarWindow>(RoadTypeIsRoad(_cur_roadtype) ? _build_road_desc : _build_tramway_desc, TRANSPORT_ROAD);
 }
 
-static const NWidgetPart _nested_build_road_scen_widgets[] = {
+static constexpr NWidgetPart _nested_build_road_scen_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
-		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetDataTip(STR_WHITE_STRING, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetStringTip(STR_JUST_STRING2, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS), SetTextStyle(TC_WHITE),
 		NWidget(WWT_STICKYBOX, COLOUR_DARK_GREEN),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_X),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_Y),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_AUTOROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_AUTOROAD, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_AUTOROAD, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOROAD),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_DEMOLISH),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
 		NWidget(WWT_PANEL, COLOUR_DARK_GREEN, -1), SetMinimalSize(0, 22), SetFill(1, 1), EndContainer(),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ONE_WAY),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_ONE_WAY, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_ONE_WAY_ROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_ONE_WAY, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_ONE_WAY_ROAD),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_BRIDGE),
-						SetFill(0, 1), SetMinimalSize(43, 22), SetDataTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_BRIDGE),
+						SetFill(0, 1), SetMinimalSize(43, 22), SetSpriteTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_BRIDGE),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_TUNNEL),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_TUNNEL),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_ROAD_TUNNEL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_REMOVE),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_ROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_ROAD),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_CONVERT_ROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_ROAD),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_ROAD),
 	EndContainer(),
 };
 
 static WindowDesc _build_road_scen_desc(
 	WDP_AUTO, "toolbar_road_scen", 0, 0,
 	WC_SCEN_BUILD_TOOLBAR, WC_NONE,
-	WDF_CONSTRUCTION,
-	_nested_build_road_scen_widgets, lengthof(_nested_build_road_scen_widgets),
+	WindowDefaultFlag::Construction,
+	_nested_build_road_scen_widgets,
 	&BuildRoadToolbarWindow::road_hotkeys
 );
 
-static const NWidgetPart _nested_build_tramway_scen_widgets[] = {
+static constexpr NWidgetPart _nested_build_tramway_scen_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
-		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetDataTip(STR_WHITE_STRING, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_ROT_CAPTION), SetStringTip(STR_JUST_STRING2, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS), SetTextStyle(TC_WHITE),
 		NWidget(WWT_STICKYBOX, COLOUR_DARK_GREEN),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_X),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_TRAMWAY_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_TRAMWAY_X_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_ROAD_Y),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_TRAMWAY_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_TRAMWAY_Y_DIR, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_SECTION),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_AUTOROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_AUTOTRAM, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOTRAM),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_AUTOTRAM, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_AUTOTRAM),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_DEMOLISH),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_DYNAMITE, STR_TOOLTIP_DEMOLISH_BUILDINGS_ETC),
 		NWidget(WWT_PANEL, COLOUR_DARK_GREEN, -1), SetMinimalSize(0, 22), SetFill(1, 1), EndContainer(),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_BRIDGE),
-						SetFill(0, 1), SetMinimalSize(43, 22), SetDataTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_BRIDGE),
+						SetFill(0, 1), SetMinimalSize(43, 22), SetSpriteTip(SPR_IMG_BRIDGE, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_BRIDGE),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_BUILD_TUNNEL),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_TUNNEL),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_ROAD_TUNNEL, STR_ROAD_TOOLBAR_TOOLTIP_BUILD_TRAMWAY_TUNNEL),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_REMOVE),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_TRAMWAYS),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_REMOVE, STR_ROAD_TOOLBAR_TOOLTIP_TOGGLE_BUILD_REMOVE_FOR_TRAMWAYS),
 		NWidget(WWT_IMGBTN, COLOUR_DARK_GREEN, WID_ROT_CONVERT_ROAD),
-						SetFill(0, 1), SetMinimalSize(22, 22), SetDataTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_TRAM),
+						SetFill(0, 1), SetMinimalSize(22, 22), SetSpriteTip(SPR_IMG_CONVERT_ROAD, STR_ROAD_TOOLBAR_TOOLTIP_CONVERT_TRAM),
 	EndContainer(),
 };
 
 static WindowDesc _build_tramway_scen_desc(
 	WDP_AUTO, "toolbar_tram_scen", 0, 0,
 	WC_SCEN_BUILD_TOOLBAR, WC_NONE,
-	WDF_CONSTRUCTION,
-	_nested_build_tramway_scen_widgets, lengthof(_nested_build_tramway_scen_widgets),
+	WindowDefaultFlag::Construction,
+	_nested_build_tramway_scen_widgets,
 	&BuildRoadToolbarWindow::tram_hotkeys
 );
 
@@ -978,48 +1087,57 @@ Window *ShowBuildRoadScenToolbar(RoadType roadtype)
 	CloseWindowById(WC_SCEN_BUILD_TOOLBAR, TRANSPORT_ROAD);
 	_cur_roadtype = roadtype;
 
-	return AllocateWindowDescFront<BuildRoadToolbarWindow>(RoadTypeIsRoad(_cur_roadtype) ? &_build_road_scen_desc : &_build_tramway_scen_desc, TRANSPORT_ROAD);
+	return AllocateWindowDescFront<BuildRoadToolbarWindow>(RoadTypeIsRoad(_cur_roadtype) ? _build_road_scen_desc : _build_tramway_scen_desc, TRANSPORT_ROAD);
 }
 
 struct BuildRoadDepotWindow : public PickerWindowBase {
-	BuildRoadDepotWindow(WindowDesc *desc, Window *parent) : PickerWindowBase(desc, parent)
+	BuildRoadDepotWindow(WindowDesc &desc, Window *parent) : PickerWindowBase(desc, parent)
 	{
 		this->CreateNestedTree();
 
-		this->LowerWidget(_road_depot_orientation + WID_BROD_DEPOT_NE);
+		this->LowerWidget(WID_BROD_DEPOT_NE + _road_depot_orientation);
 		if (RoadTypeIsTram(_cur_roadtype)) {
-			this->GetWidget<NWidgetCore>(WID_BROD_CAPTION)->widget_data = STR_BUILD_DEPOT_TRAM_ORIENTATION_CAPTION;
-			for (int i = WID_BROD_DEPOT_NE; i <= WID_BROD_DEPOT_NW; i++) this->GetWidget<NWidgetCore>(i)->tool_tip = STR_BUILD_DEPOT_TRAM_ORIENTATION_SELECT_TOOLTIP;
+			this->GetWidget<NWidgetCore>(WID_BROD_CAPTION)->SetString(STR_BUILD_DEPOT_TRAM_ORIENTATION_CAPTION);
+			for (WidgetID i = WID_BROD_DEPOT_NE; i <= WID_BROD_DEPOT_NW; i++) {
+				this->GetWidget<NWidgetCore>(i)->SetToolTip(STR_BUILD_DEPOT_TRAM_ORIENTATION_SELECT_TOOLTIP);
+			}
 		}
 
 		this->FinishInitNested(TRANSPORT_ROAD);
 	}
 
-	void UpdateWidgetSize(int widget, Dimension *size, const Dimension &padding, Dimension *fill, Dimension *resize) override
+	void UpdateWidgetSize(WidgetID widget, Dimension &size, [[maybe_unused]] const Dimension &padding, [[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		if (!IsInsideMM(widget, WID_BROD_DEPOT_NE, WID_BROD_DEPOT_NW + 1)) return;
 
-		size->width  = ScaleGUITrad(64) + 2;
-		size->height = ScaleGUITrad(48) + 2;
+		size.width  = ScaleGUITrad(64) + WidgetDimensions::scaled.fullbevel.Horizontal();
+		size.height = ScaleGUITrad(48) + WidgetDimensions::scaled.fullbevel.Vertical();
 	}
 
-	void DrawWidget(const Rect &r, int widget) const override
+	void DrawWidget(const Rect &r, WidgetID widget) const override
 	{
 		if (!IsInsideMM(widget, WID_BROD_DEPOT_NE, WID_BROD_DEPOT_NW + 1)) return;
 
-		DrawRoadDepotSprite(r.left + 1 + ScaleGUITrad(31), r.bottom - ScaleGUITrad(31), (DiagDirection)(widget - WID_BROD_DEPOT_NE + DIAGDIR_NE), _cur_roadtype);
+		DrawPixelInfo tmp_dpi;
+		Rect ir = r.Shrink(WidgetDimensions::scaled.bevel);
+		if (FillDrawPixelInfo(&tmp_dpi, ir)) {
+			AutoRestoreBackup dpi_backup(_cur_dpi, &tmp_dpi);
+			int x = (ir.Width()  - ScaleSpriteTrad(64)) / 2 + ScaleSpriteTrad(31);
+			int y = (ir.Height() + ScaleSpriteTrad(48)) / 2 - ScaleSpriteTrad(31);
+			DrawRoadDepotSprite(x, y, (DiagDirection)(widget - WID_BROD_DEPOT_NE + DIAGDIR_NE), _cur_roadtype);
+		}
 	}
 
-	void OnClick(Point pt, int widget, int click_count) override
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
 	{
 		switch (widget) {
 			case WID_BROD_DEPOT_NW:
 			case WID_BROD_DEPOT_NE:
 			case WID_BROD_DEPOT_SW:
 			case WID_BROD_DEPOT_SE:
-				this->RaiseWidget(_road_depot_orientation + WID_BROD_DEPOT_NE);
+				this->RaiseWidget(WID_BROD_DEPOT_NE + _road_depot_orientation);
 				_road_depot_orientation = (DiagDirection)(widget - WID_BROD_DEPOT_NE);
-				this->LowerWidget(_road_depot_orientation + WID_BROD_DEPOT_NE);
+				this->LowerWidget(WID_BROD_DEPOT_NE + _road_depot_orientation);
 				if (_settings_client.sound.click_beep) SndPlayFx(SND_15_BEEP);
 				this->SetDirty();
 				break;
@@ -1030,76 +1148,201 @@ struct BuildRoadDepotWindow : public PickerWindowBase {
 	}
 };
 
-static const NWidgetPart _nested_build_road_depot_widgets[] = {
+static constexpr NWidgetPart _nested_build_road_depot_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
-		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_BROD_CAPTION), SetDataTip(STR_BUILD_DEPOT_ROAD_ORIENTATION_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN, WID_BROD_CAPTION), SetStringTip(STR_BUILD_DEPOT_ROAD_ORIENTATION_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
 	EndContainer(),
 	NWidget(WWT_PANEL, COLOUR_DARK_GREEN),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 3),
-		NWidget(NWID_HORIZONTAL_LTR),
-			NWidget(NWID_SPACER), SetMinimalSize(3, 0), SetFill(1, 0),
-			NWidget(NWID_VERTICAL),
-				NWidget(WWT_PANEL, COLOUR_GREY, WID_BROD_DEPOT_NW), SetMinimalSize(66, 50), SetDataTip(0x0, STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
-				EndContainer(),
-				NWidget(NWID_SPACER), SetMinimalSize(0, 2),
-				NWidget(WWT_PANEL, COLOUR_GREY, WID_BROD_DEPOT_SW), SetMinimalSize(66, 50), SetDataTip(0x0, STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
-				EndContainer(),
+		NWidget(NWID_HORIZONTAL_LTR), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0), SetPIPRatio(1, 0, 1), SetPadding(WidgetDimensions::unscaled.picker),
+			NWidget(NWID_VERTICAL), SetPIP(0, WidgetDimensions::unscaled.vsep_normal, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROD_DEPOT_NW), SetFill(0, 0), SetToolTip(STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROD_DEPOT_SW), SetFill(0, 0), SetToolTip(STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
 			EndContainer(),
-			NWidget(NWID_SPACER), SetMinimalSize(2, 0),
-			NWidget(NWID_VERTICAL),
-				NWidget(WWT_PANEL, COLOUR_GREY, WID_BROD_DEPOT_NE), SetMinimalSize(66, 50), SetDataTip(0x0, STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
-				EndContainer(),
-				NWidget(NWID_SPACER), SetMinimalSize(0, 2),
-				NWidget(WWT_PANEL, COLOUR_GREY, WID_BROD_DEPOT_SE), SetMinimalSize(66, 50), SetDataTip(0x0, STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
-				EndContainer(),
+			NWidget(NWID_VERTICAL), SetPIP(0, WidgetDimensions::unscaled.vsep_normal, 0),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROD_DEPOT_NE), SetFill(0, 0), SetToolTip(STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
+				NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROD_DEPOT_SE), SetFill(0, 0), SetToolTip(STR_BUILD_DEPOT_ROAD_ORIENTATION_SELECT_TOOLTIP),
 			EndContainer(),
-			NWidget(NWID_SPACER), SetMinimalSize(3, 0), SetFill(1, 0),
 		EndContainer(),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 3),
 	EndContainer(),
 };
 
 static WindowDesc _build_road_depot_desc(
 	WDP_AUTO, nullptr, 0, 0,
 	WC_BUILD_DEPOT, WC_BUILD_TOOLBAR,
-	WDF_CONSTRUCTION,
-	_nested_build_road_depot_widgets, lengthof(_nested_build_road_depot_widgets)
+	WindowDefaultFlag::Construction,
+	_nested_build_road_depot_widgets
 );
 
 static void ShowRoadDepotPicker(Window *parent)
 {
-	new BuildRoadDepotWindow(&_build_road_depot_desc, parent);
+	new BuildRoadDepotWindow(_build_road_depot_desc, parent);
 }
 
-struct BuildRoadStationWindow : public PickerWindowBase {
-	BuildRoadStationWindow(WindowDesc *desc, Window *parent, RoadStopType rs) : PickerWindowBase(desc, parent)
+template <RoadStopType roadstoptype>
+class RoadStopPickerCallbacks : public PickerCallbacksNewGRFClass<RoadStopClass> {
+public:
+	RoadStopPickerCallbacks(const std::string &ini_group) : PickerCallbacksNewGRFClass<RoadStopClass>(ini_group) {}
+
+	StringID GetClassTooltip() const override;
+	StringID GetTypeTooltip() const override;
+
+	bool IsActive() const override
 	{
-		this->CreateNestedTree();
-
-		/* Trams don't have non-drivethrough stations */
-		if (RoadTypeIsTram(_cur_roadtype) && _road_station_picker_orientation < DIAGDIR_END) {
-			_road_station_picker_orientation = DIAGDIR_END;
+		for (const auto &cls : RoadStopClass::Classes()) {
+			if (IsWaypointClass(cls)) continue;
+			for (const auto *spec : cls.Specs()) {
+				if (spec == nullptr) continue;
+				if (roadstoptype == RoadStopType::Truck && spec->stop_type != ROADSTOPTYPE_FREIGHT && spec->stop_type != ROADSTOPTYPE_ALL) continue;
+				if (roadstoptype == RoadStopType::Bus && spec->stop_type != ROADSTOPTYPE_PASSENGER && spec->stop_type != ROADSTOPTYPE_ALL) continue;
+				return true;
+			}
 		}
-		const RoadTypeInfo *rti = GetRoadTypeInfo(_cur_roadtype);
-		this->GetWidget<NWidgetCore>(WID_BROS_CAPTION)->widget_data = rti->strings.picker_title[rs];
-
-		for (uint i = RoadTypeIsTram(_cur_roadtype) ? WID_BROS_STATION_X : WID_BROS_STATION_NE; i < WID_BROS_LT_OFF; i++) {
-			this->GetWidget<NWidgetCore>(i)->tool_tip = rti->strings.picker_tooltip[rs];
-		}
-
-		this->LowerWidget(_road_station_picker_orientation + WID_BROS_STATION_NE);
-		this->LowerWidget(_settings_client.gui.station_show_coverage + WID_BROS_LT_OFF);
-
-		this->FinishInitNested(TRANSPORT_ROAD);
-
-		this->window_class = (rs == ROADSTOP_BUS) ? WC_BUS_STATION : WC_TRUCK_STATION;
+		return false;
 	}
 
-	void Close() override
+	static bool IsClassChoice(const RoadStopClass &cls)
+	{
+		return !IsWaypointClass(cls) && GetIfClassHasNewStopsByType(&cls, roadstoptype, _cur_roadtype);
+	}
+
+	bool HasClassChoice() const override
+	{
+		return std::ranges::count_if(RoadStopClass::Classes(), IsClassChoice);
+	}
+
+	int GetSelectedClass() const override { return _roadstop_gui.sel_class; }
+	void SetSelectedClass(int id) const override { _roadstop_gui.sel_class = this->GetClassIndex(id); }
+
+	StringID GetClassName(int id) const override
+	{
+		const auto *rsc = this->GetClass(id);
+		if (!IsClassChoice(*rsc)) return INVALID_STRING_ID;
+		return rsc->name;
+	}
+
+	int GetSelectedType() const override { return _roadstop_gui.sel_type; }
+	void SetSelectedType(int id) const override { _roadstop_gui.sel_type = id; }
+
+	StringID GetTypeName(int cls_id, int id) const override
+	{
+		const auto *spec = this->GetSpec(cls_id, id);
+		if (!IsRoadStopEverAvailable(spec, roadstoptype == RoadStopType::Bus ? StationType::Bus : StationType::Truck)) return INVALID_STRING_ID;
+		return (spec == nullptr) ? STR_STATION_CLASS_DFLT_ROADSTOP : spec->name;
+	}
+
+	bool IsTypeAvailable(int cls_id, int id) const override
+	{
+		const auto *spec = this->GetSpec(cls_id, id);
+		return IsRoadStopAvailable(spec, roadstoptype == RoadStopType::Bus ? StationType::Bus : StationType::Truck);
+	}
+
+	void DrawType(int x, int y, int cls_id, int id) const override
+	{
+		const auto *spec = this->GetSpec(cls_id, id);
+		if (spec == nullptr) {
+			StationPickerDrawSprite(x, y, roadstoptype == RoadStopType::Bus ? StationType::Bus : StationType::Truck, INVALID_RAILTYPE, _cur_roadtype, _roadstop_gui.orientation);
+		} else {
+			DiagDirection orientation = _roadstop_gui.orientation;
+			if (orientation < DIAGDIR_END && spec->flags.Test(RoadStopSpecFlag::DriveThroughOnly)) orientation = DIAGDIR_END;
+			DrawRoadStopTile(x, y, _cur_roadtype, spec, roadstoptype == RoadStopType::Bus ? StationType::Bus : StationType::Truck, (uint8_t)orientation);
+		}
+	}
+
+	void FillUsedItems(std::set<PickerItem> &items) override
+	{
+		for (const Station *st : Station::Iterate()) {
+			if (st->owner != _local_company) continue;
+			if (roadstoptype == RoadStopType::Truck && !(st->facilities & FACIL_TRUCK_STOP)) continue;
+			if (roadstoptype == RoadStopType::Bus && !(st->facilities & FACIL_BUS_STOP)) continue;
+			items.insert({0, 0, ROADSTOP_CLASS_DFLT, 0}); // We would need to scan the map to find out if default is used.
+			for (const auto &sm : st->roadstop_speclist) {
+				if (sm.spec == nullptr) continue;
+				if (roadstoptype == RoadStopType::Truck && sm.spec->stop_type != ROADSTOPTYPE_FREIGHT && sm.spec->stop_type != ROADSTOPTYPE_ALL) continue;
+				if (roadstoptype == RoadStopType::Bus && sm.spec->stop_type != ROADSTOPTYPE_PASSENGER && sm.spec->stop_type != ROADSTOPTYPE_ALL) continue;
+				items.insert({sm.grfid, sm.localidx, sm.spec->class_index, sm.spec->index});
+			}
+		}
+	}
+};
+
+template <> StringID RoadStopPickerCallbacks<RoadStopType::Bus>::GetClassTooltip() const { return STR_PICKER_ROADSTOP_BUS_CLASS_TOOLTIP; }
+template <> StringID RoadStopPickerCallbacks<RoadStopType::Bus>::GetTypeTooltip() const { return STR_PICKER_ROADSTOP_BUS_TYPE_TOOLTIP; }
+
+template <> StringID RoadStopPickerCallbacks<RoadStopType::Truck>::GetClassTooltip() const { return STR_PICKER_ROADSTOP_TRUCK_CLASS_TOOLTIP; }
+template <> StringID RoadStopPickerCallbacks<RoadStopType::Truck>::GetTypeTooltip() const { return STR_PICKER_ROADSTOP_TRUCK_TYPE_TOOLTIP; }
+
+static RoadStopPickerCallbacks<RoadStopType::Bus> _bus_callback_instance("fav_passenger_roadstops");
+static RoadStopPickerCallbacks<RoadStopType::Truck> _truck_callback_instance("fav_freight_roadstops");
+
+static PickerCallbacks &GetRoadStopPickerCallbacks(RoadStopType rs)
+{
+	return rs == RoadStopType::Bus ? static_cast<PickerCallbacks &>(_bus_callback_instance) : static_cast<PickerCallbacks &>(_truck_callback_instance);
+}
+
+struct BuildRoadStationWindow : public PickerWindow {
+private:
+	uint coverage_height; ///< Height of the coverage texts.
+
+	void CheckOrientationValid()
+	{
+		const RoadStopSpec *spec = RoadStopClass::Get(_roadstop_gui.sel_class)->GetSpec(_roadstop_gui.sel_type);
+
+		/* Raise and lower to ensure the correct widget is lowered after changing displayed orientation plane. */
+		if (RoadTypeIsRoad(_cur_roadtype)) {
+			this->RaiseWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
+			this->GetWidget<NWidgetStacked>(WID_BROS_AVAILABLE_ORIENTATIONS)->SetDisplayedPlane((spec != nullptr && spec->flags.Test(RoadStopSpecFlag::DriveThroughOnly)) ? 1 : 0);
+			this->LowerWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
+		}
+
+		if (_roadstop_gui.orientation >= DIAGDIR_END) return;
+
+		if (spec != nullptr && spec->flags.Test(RoadStopSpecFlag::DriveThroughOnly)) {
+			this->RaiseWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
+			_roadstop_gui.orientation = DIAGDIR_END;
+			this->LowerWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
+			this->SetDirty();
+			CloseWindowById(WC_SELECT_STATION, 0);
+		}
+	}
+
+public:
+	BuildRoadStationWindow(WindowDesc &desc, Window *parent, RoadStopType rs) : PickerWindow(desc, parent, TRANSPORT_ROAD, GetRoadStopPickerCallbacks(rs))
+	{
+		this->coverage_height = 2 * GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal;
+
+		/* Trams don't have non-drivethrough stations */
+		if (RoadTypeIsTram(_cur_roadtype) && _roadstop_gui.orientation < DIAGDIR_END) {
+			_roadstop_gui.orientation = DIAGDIR_END;
+		}
+		this->ConstructWindow();
+
+		const RoadTypeInfo *rti = GetRoadTypeInfo(_cur_roadtype);
+		this->GetWidget<NWidgetCore>(WID_BROS_CAPTION)->SetString(rti->strings.picker_title[to_underlying(rs)]);
+
+		for (WidgetID i = RoadTypeIsTram(_cur_roadtype) ? WID_BROS_STATION_X : WID_BROS_STATION_NE; i < WID_BROS_LT_OFF; i++) {
+			this->GetWidget<NWidgetCore>(i)->SetToolTip(rti->strings.picker_tooltip[to_underlying(rs)]);
+		}
+
+		this->LowerWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
+		this->LowerWidget(WID_BROS_LT_OFF + _settings_client.gui.station_show_coverage);
+
+		this->window_class = (rs == RoadStopType::Bus) ? WC_BUS_STATION : WC_TRUCK_STATION;
+	}
+
+	void Close([[maybe_unused]] int data = 0) override
 	{
 		CloseWindowById(WC_SELECT_STATION, 0);
-		this->PickerWindowBase::Close();
+		this->PickerWindow::Close();
+	}
+
+	void OnInvalidateData([[maybe_unused]] int data = 0, [[maybe_unused]] bool gui_scope = true) override
+	{
+		this->PickerWindow::OnInvalidateData(data, gui_scope);
+
+		if (gui_scope) {
+			this->CheckOrientationValid();
+		}
 	}
 
 	void OnPaint() override
@@ -1113,39 +1356,25 @@ struct BuildRoadStationWindow : public PickerWindowBase {
 			SetTileSelectSize(1, 1);
 		}
 
+		if (this->IsShaded()) return;
+
 		/* 'Accepts' and 'Supplies' texts. */
 		StationCoverageType sct = (this->window_class == WC_BUS_STATION) ? SCT_PASSENGERS_ONLY : SCT_NON_PASSENGERS_ONLY;
-		int top = this->GetWidget<NWidgetBase>(WID_BROS_LT_ON)->pos_y + this->GetWidget<NWidgetBase>(WID_BROS_LT_ON)->current_y + WD_PAR_VSEP_NORMAL;
-		NWidgetBase *back_nwi = this->GetWidget<NWidgetBase>(WID_BROS_BACKGROUND);
-		int right = back_nwi->pos_x +  back_nwi->current_x;
-		int bottom = back_nwi->pos_y +  back_nwi->current_y;
-		top = DrawStationCoverageAreaText(back_nwi->pos_x + WD_FRAMERECT_LEFT, right - WD_FRAMERECT_RIGHT, top, sct, rad, false) + WD_PAR_VSEP_NORMAL;
-		top = DrawStationCoverageAreaText(back_nwi->pos_x + WD_FRAMERECT_LEFT, right - WD_FRAMERECT_RIGHT, top, sct, rad, true) + WD_PAR_VSEP_NORMAL;
+		Rect r = this->GetWidget<NWidgetBase>(WID_BROS_ACCEPTANCE)->GetCurrentRect();
+		const int bottom = r.bottom;
+		r.bottom = INT_MAX; // Allow overflow as we want to know the required height.
+		r.top = DrawStationCoverageAreaText(r, sct, rad, false) + WidgetDimensions::scaled.vsep_normal;
+		r.top = DrawStationCoverageAreaText(r, sct, rad, true);
 		/* Resize background if the window is too small.
 		 * Never make the window smaller to avoid oscillating if the size change affects the acceptance.
 		 * (This is the case, if making the window bigger moves the mouse into the window.) */
-		if (top > bottom) {
-			ResizeWindow(this, 0, top - bottom, false);
+		if (r.top > bottom) {
+			this->coverage_height += r.top - bottom;
+			this->ReInit();
 		}
 	}
 
-	void UpdateWidgetSize(int widget, Dimension *size, const Dimension &padding, Dimension *fill, Dimension *resize) override
-	{
-		if (!IsInsideMM(widget, WID_BROS_STATION_NE, WID_BROS_STATION_Y + 1)) return;
-
-		size->width  = ScaleGUITrad(64) + 2;
-		size->height = ScaleGUITrad(48) + 2;
-	}
-
-	void DrawWidget(const Rect &r, int widget) const override
-	{
-		if (!IsInsideMM(widget, WID_BROS_STATION_NE, WID_BROS_STATION_Y + 1)) return;
-
-		StationType st = (this->window_class == WC_BUS_STATION) ? STATION_BUS : STATION_TRUCK;
-		StationPickerDrawSprite(r.left + 1 + ScaleGUITrad(31), r.bottom - ScaleGUITrad(31), st, INVALID_RAILTYPE, _cur_roadtype, widget - WID_BROS_STATION_NE);
-	}
-
-	void OnClick(Point pt, int widget, int click_count) override
+	void UpdateWidgetSize(WidgetID widget, Dimension &size, [[maybe_unused]] const Dimension &padding, [[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		switch (widget) {
 			case WID_BROS_STATION_NE:
@@ -1154,9 +1383,80 @@ struct BuildRoadStationWindow : public PickerWindowBase {
 			case WID_BROS_STATION_NW:
 			case WID_BROS_STATION_X:
 			case WID_BROS_STATION_Y:
-				this->RaiseWidget(_road_station_picker_orientation + WID_BROS_STATION_NE);
-				_road_station_picker_orientation = (DiagDirection)(widget - WID_BROS_STATION_NE);
-				this->LowerWidget(_road_station_picker_orientation + WID_BROS_STATION_NE);
+				size.width  = ScaleGUITrad(PREVIEW_WIDTH) + WidgetDimensions::scaled.fullbevel.Horizontal();
+				size.height = ScaleGUITrad(PREVIEW_HEIGHT) + WidgetDimensions::scaled.fullbevel.Vertical();
+				break;
+
+			case WID_BROS_ACCEPTANCE:
+				size.height = this->coverage_height;
+				break;
+
+			default:
+				this->PickerWindow::UpdateWidgetSize(widget, size, padding, fill, resize);
+				break;
+		}
+	}
+
+	/**
+	 * Simply to have a easier way to get the StationType for bus, truck and trams from the WindowClass.
+	 */
+	StationType GetRoadStationTypeByWindowClass(WindowClass window_class) const
+	{
+		switch (window_class) {
+			case WC_BUS_STATION:          return StationType::Bus;
+			case WC_TRUCK_STATION:        return StationType::Truck;
+			default: NOT_REACHED();
+		}
+	}
+
+	void DrawWidget(const Rect &r, WidgetID widget) const override
+	{
+		switch (widget) {
+			case WID_BROS_STATION_NE:
+			case WID_BROS_STATION_SE:
+			case WID_BROS_STATION_SW:
+			case WID_BROS_STATION_NW:
+			case WID_BROS_STATION_X:
+			case WID_BROS_STATION_Y: {
+				StationType st = GetRoadStationTypeByWindowClass(this->window_class);
+				const RoadStopSpec *spec = RoadStopClass::Get(_roadstop_gui.sel_class)->GetSpec(_roadstop_gui.sel_type);
+				DrawPixelInfo tmp_dpi;
+				Rect ir = r.Shrink(WidgetDimensions::scaled.bevel);
+				if (FillDrawPixelInfo(&tmp_dpi, ir)) {
+					AutoRestoreBackup dpi_backup(_cur_dpi, &tmp_dpi);
+					int x = (ir.Width()  - ScaleSpriteTrad(PREVIEW_WIDTH)) / 2 + ScaleSpriteTrad(PREVIEW_LEFT);
+					int y = (ir.Height() + ScaleSpriteTrad(PREVIEW_HEIGHT)) / 2 - ScaleSpriteTrad(PREVIEW_BOTTOM);
+					if (spec == nullptr) {
+						StationPickerDrawSprite(x, y, st, INVALID_RAILTYPE, _cur_roadtype, widget - WID_BROS_STATION_NE);
+					} else {
+						DrawRoadStopTile(x, y, _cur_roadtype, spec, st, widget - WID_BROS_STATION_NE);
+					}
+				}
+				break;
+			}
+
+			default:
+				this->PickerWindow::DrawWidget(r, widget);
+				break;
+		}
+	}
+
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
+	{
+		switch (widget) {
+			case WID_BROS_STATION_NE:
+			case WID_BROS_STATION_SE:
+			case WID_BROS_STATION_SW:
+			case WID_BROS_STATION_NW:
+			case WID_BROS_STATION_X:
+			case WID_BROS_STATION_Y:
+				if (widget < WID_BROS_STATION_X) {
+					const RoadStopSpec *spec = RoadStopClass::Get(_roadstop_gui.sel_class)->GetSpec(_roadstop_gui.sel_type);
+					if (spec != nullptr && spec->flags.Test(RoadStopSpecFlag::DriveThroughOnly)) return;
+				}
+				this->RaiseWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
+				_roadstop_gui.orientation = (DiagDirection)(widget - WID_BROS_STATION_NE);
+				this->LowerWidget(WID_BROS_STATION_NE + _roadstop_gui.orientation);
 				if (_settings_client.sound.click_beep) SndPlayFx(SND_15_BEEP);
 				this->SetDirty();
 				CloseWindowById(WC_SELECT_STATION, 0);
@@ -1173,110 +1473,252 @@ struct BuildRoadStationWindow : public PickerWindowBase {
 				break;
 
 			default:
+				this->PickerWindow::OnClick(pt, widget, click_count);
 				break;
 		}
 	}
 
-	void OnRealtimeTick(uint delta_ms) override
+	void OnRealtimeTick([[maybe_unused]] uint delta_ms) override
 	{
 		CheckRedrawStationCoverage(this);
 	}
+
+	static inline HotkeyList road_hotkeys{"buildroadstop", {
+		Hotkey('F', "focus_filter_box", PCWHK_FOCUS_FILTER_BOX),
+	}};
+
+	static inline HotkeyList tram_hotkeys{"buildtramstop", {
+		Hotkey('F', "focus_filter_box", PCWHK_FOCUS_FILTER_BOX),
+	}};
 };
 
 /** Widget definition of the build road station window */
-static const NWidgetPart _nested_road_station_picker_widgets[] = {
+static constexpr NWidgetPart _nested_road_station_picker_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
 		NWidget(WWT_CAPTION,  COLOUR_DARK_GREEN, WID_BROS_CAPTION),
+		NWidget(WWT_SHADEBOX, COLOUR_DARK_GREEN),
+		NWidget(WWT_DEFSIZEBOX, COLOUR_DARK_GREEN),
 	EndContainer(),
-	NWidget(WWT_PANEL, COLOUR_DARK_GREEN, WID_BROS_BACKGROUND),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 3),
-		NWidget(NWID_HORIZONTAL), SetPIP(0, 2, 0),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_NW), SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_NE), SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_X),  SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(NWID_SPACER), SetFill(1, 0),
+	NWidget(NWID_HORIZONTAL),
+		NWidget(NWID_VERTICAL),
+			NWidgetFunction(MakePickerClassWidgets),
+			NWidget(WWT_PANEL, COLOUR_DARK_GREEN),
+				NWidget(NWID_VERTICAL), SetPIP(0, WidgetDimensions::unscaled.vsep_picker, 0), SetPadding(WidgetDimensions::unscaled.picker),
+					NWidget(NWID_SELECTION, INVALID_COLOUR, WID_BROS_AVAILABLE_ORIENTATIONS),
+						/* 6-orientation plane. */
+						NWidget(NWID_VERTICAL), SetPIP(0, WidgetDimensions::unscaled.vsep_normal, 0),
+							NWidget(NWID_HORIZONTAL), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0), SetPIPRatio(1, 0, 1),
+								NWidget(NWID_HORIZONTAL_LTR), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0),
+									NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_NW), SetFill(0, 0), EndContainer(),
+									NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_NE), SetFill(0, 0), EndContainer(),
+								EndContainer(),
+								NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_X), SetFill(0, 0), EndContainer(),
+							EndContainer(),
+							NWidget(NWID_HORIZONTAL), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0), SetPIPRatio(1, 0, 1),
+								NWidget(NWID_HORIZONTAL_LTR), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0),
+									NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_SW), SetFill(0, 0), EndContainer(),
+									NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_SE), SetFill(0, 0), EndContainer(),
+								EndContainer(),
+								NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_Y), SetFill(0, 0), EndContainer(),
+							EndContainer(),
+						EndContainer(),
+						/* 2-orientation plane. */
+						NWidget(NWID_VERTICAL), SetPIPRatio(0, 0, 1),
+							NWidget(NWID_HORIZONTAL_LTR), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0), SetPIPRatio(1, 0, 1),
+								NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_X), SetFill(0, 0), EndContainer(),
+								NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_Y), SetFill(0, 0), EndContainer(),
+							EndContainer(),
+						EndContainer(),
+					EndContainer(),
+					NWidget(WWT_LABEL, INVALID_COLOUR), SetStringTip(STR_STATION_BUILD_COVERAGE_AREA_TITLE), SetFill(1, 0),
+					NWidget(NWID_HORIZONTAL), SetPIPRatio(1, 0, 1),
+						NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_OFF), SetMinimalSize(60, 12),
+								SetStringTip(STR_STATION_BUILD_COVERAGE_OFF, STR_STATION_BUILD_COVERAGE_AREA_OFF_TOOLTIP),
+						NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_ON), SetMinimalSize(60, 12),
+								SetStringTip(STR_STATION_BUILD_COVERAGE_ON, STR_STATION_BUILD_COVERAGE_AREA_ON_TOOLTIP),
+					EndContainer(),
+					NWidget(WWT_EMPTY, INVALID_COLOUR, WID_BROS_ACCEPTANCE), SetFill(1, 1), SetResize(1, 0), SetMinimalTextLines(2, 0),
+				EndContainer(),
+			EndContainer(),
 		EndContainer(),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 2),
-		NWidget(NWID_HORIZONTAL), SetPIP(0, 2, 0),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_SW), SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_SE), SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_Y),  SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-		EndContainer(),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 1),
-		NWidget(NWID_HORIZONTAL), SetPIP(2, 0, 2),
-			NWidget(WWT_LABEL, COLOUR_DARK_GREEN, WID_BROS_INFO), SetMinimalSize(140, 14), SetDataTip(STR_STATION_BUILD_COVERAGE_AREA_TITLE, STR_NULL),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-		EndContainer(),
-		NWidget(NWID_HORIZONTAL), SetPIP(2, 0, 2),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_OFF), SetMinimalSize(60, 12),
-											SetDataTip(STR_STATION_BUILD_COVERAGE_OFF, STR_STATION_BUILD_COVERAGE_AREA_OFF_TOOLTIP),
-			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_ON), SetMinimalSize(60, 12),
-											SetDataTip(STR_STATION_BUILD_COVERAGE_ON, STR_STATION_BUILD_COVERAGE_AREA_ON_TOOLTIP),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-		EndContainer(),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 10), SetResize(0, 1),
+		NWidgetFunction(MakePickerTypeWidgets),
 	EndContainer(),
 };
 
 static WindowDesc _road_station_picker_desc(
-	WDP_AUTO, nullptr, 0, 0,
+	WDP_AUTO, "build_station_road", 0, 0,
 	WC_BUS_STATION, WC_BUILD_TOOLBAR,
-	WDF_CONSTRUCTION,
-	_nested_road_station_picker_widgets, lengthof(_nested_road_station_picker_widgets)
+	WindowDefaultFlag::Construction,
+	_nested_road_station_picker_widgets,
+	&BuildRoadStationWindow::road_hotkeys
 );
 
 /** Widget definition of the build tram station window */
-static const NWidgetPart _nested_tram_station_picker_widgets[] = {
+static constexpr NWidgetPart _nested_tram_station_picker_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
 		NWidget(WWT_CAPTION,  COLOUR_DARK_GREEN, WID_BROS_CAPTION),
+		NWidget(WWT_SHADEBOX, COLOUR_DARK_GREEN),
+		NWidget(WWT_DEFSIZEBOX, COLOUR_DARK_GREEN),
 	EndContainer(),
-	NWidget(WWT_PANEL, COLOUR_DARK_GREEN, WID_BROS_BACKGROUND),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 3),
-		NWidget(NWID_HORIZONTAL), SetPIP(0, 2, 0),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_X),  SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_Y),  SetMinimalSize(66, 50), SetFill(0, 0), EndContainer(),
-			NWidget(NWID_SPACER), SetFill(1, 0),
+	NWidget(NWID_HORIZONTAL),
+		NWidget(NWID_VERTICAL),
+			NWidgetFunction(MakePickerClassWidgets),
+			NWidget(WWT_PANEL, COLOUR_DARK_GREEN),
+				NWidget(NWID_VERTICAL), SetPIP(0, WidgetDimensions::unscaled.vsep_picker, 0), SetPadding(WidgetDimensions::unscaled.picker),
+					NWidget(NWID_HORIZONTAL_LTR), SetPIP(0, WidgetDimensions::unscaled.hsep_normal, 0), SetPIPRatio(1, 0, 1),
+						NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_X), SetFill(0, 0), EndContainer(),
+						NWidget(WWT_PANEL, COLOUR_GREY, WID_BROS_STATION_Y), SetFill(0, 0), EndContainer(),
+					EndContainer(),
+					NWidget(WWT_LABEL, INVALID_COLOUR), SetStringTip(STR_STATION_BUILD_COVERAGE_AREA_TITLE), SetFill(1, 0),
+					NWidget(NWID_HORIZONTAL), SetPIPRatio(1, 0, 1),
+						NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_OFF), SetMinimalSize(60, 12),
+								SetStringTip(STR_STATION_BUILD_COVERAGE_OFF, STR_STATION_BUILD_COVERAGE_AREA_OFF_TOOLTIP),
+						NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_ON), SetMinimalSize(60, 12),
+								SetStringTip(STR_STATION_BUILD_COVERAGE_ON, STR_STATION_BUILD_COVERAGE_AREA_ON_TOOLTIP),
+					EndContainer(),
+					NWidget(WWT_EMPTY, INVALID_COLOUR, WID_BROS_ACCEPTANCE), SetFill(1, 1), SetResize(1, 0), SetMinimalTextLines(2, 0),
+				EndContainer(),
+			EndContainer(),
 		EndContainer(),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 1),
-		NWidget(NWID_HORIZONTAL), SetPIP(2, 0, 2),
-			NWidget(WWT_LABEL, COLOUR_DARK_GREEN, WID_BROS_INFO), SetMinimalSize(140, 14), SetDataTip(STR_STATION_BUILD_COVERAGE_AREA_TITLE, STR_NULL),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-		EndContainer(),
-		NWidget(NWID_HORIZONTAL), SetPIP(2, 0, 2),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_OFF), SetMinimalSize(60, 12),
-											SetDataTip(STR_STATION_BUILD_COVERAGE_OFF, STR_STATION_BUILD_COVERAGE_AREA_OFF_TOOLTIP),
-			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_BROS_LT_ON), SetMinimalSize(60, 12),
-											SetDataTip(STR_STATION_BUILD_COVERAGE_ON, STR_STATION_BUILD_COVERAGE_AREA_ON_TOOLTIP),
-			NWidget(NWID_SPACER), SetFill(1, 0),
-		EndContainer(),
-		NWidget(NWID_SPACER), SetMinimalSize(0, 10), SetResize(0, 1),
+		NWidgetFunction(MakePickerTypeWidgets),
 	EndContainer(),
 };
 
 static WindowDesc _tram_station_picker_desc(
-	WDP_AUTO, nullptr, 0, 0,
+	WDP_AUTO, "build_station_tram", 0, 0,
 	WC_BUS_STATION, WC_BUILD_TOOLBAR,
-	WDF_CONSTRUCTION,
-	_nested_tram_station_picker_widgets, lengthof(_nested_tram_station_picker_widgets)
+	WindowDefaultFlag::Construction,
+	_nested_tram_station_picker_widgets,
+	&BuildRoadStationWindow::tram_hotkeys
 );
 
 static void ShowRVStationPicker(Window *parent, RoadStopType rs)
 {
-	new BuildRoadStationWindow(RoadTypeIsRoad(_cur_roadtype) ? &_road_station_picker_desc : &_tram_station_picker_desc, parent, rs);
+	new BuildRoadStationWindow(RoadTypeIsRoad(_cur_roadtype) ? _road_station_picker_desc : _tram_station_picker_desc, parent, rs);
+}
+
+class RoadWaypointPickerCallbacks : public PickerCallbacksNewGRFClass<RoadStopClass> {
+public:
+	RoadWaypointPickerCallbacks() : PickerCallbacksNewGRFClass<RoadStopClass>("fav_road_waypoints") {}
+
+	StringID GetClassTooltip() const override { return STR_PICKER_WAYPOINT_CLASS_TOOLTIP; }
+	StringID GetTypeTooltip() const override { return STR_PICKER_WAYPOINT_TYPE_TOOLTIP; }
+
+	bool IsActive() const override
+	{
+		for (const auto &cls : RoadStopClass::Classes()) {
+			if (!IsWaypointClass(cls)) continue;
+			for (const auto *spec : cls.Specs()) {
+				if (spec != nullptr) return true;
+			}
+		}
+		return false;
+	}
+
+	bool HasClassChoice() const override
+	{
+		return std::ranges::count_if(RoadStopClass::Classes(), IsWaypointClass) > 1;
+	}
+
+	void Close(int) override { ResetObjectToPlace(); }
+	int GetSelectedClass() const override { return _waypoint_gui.sel_class; }
+	void SetSelectedClass(int id) const override { _waypoint_gui.sel_class = this->GetClassIndex(id); }
+
+	StringID GetClassName(int id) const override
+	{
+		const auto *sc = GetClass(id);
+		if (!IsWaypointClass(*sc)) return INVALID_STRING_ID;
+		return sc->name;
+	}
+
+	int GetSelectedType() const override { return _waypoint_gui.sel_type; }
+	void SetSelectedType(int id) const override { _waypoint_gui.sel_type = id; }
+
+	StringID GetTypeName(int cls_id, int id) const override
+	{
+		const auto *spec = this->GetSpec(cls_id, id);
+		return (spec == nullptr) ? STR_STATION_CLASS_WAYP_WAYPOINT : spec->name;
+	}
+
+	bool IsTypeAvailable(int cls_id, int id) const override
+	{
+		return IsRoadStopAvailable(this->GetSpec(cls_id, id), StationType::RoadWaypoint);
+	}
+
+	void DrawType(int x, int y, int cls_id, int id) const override
+	{
+		const auto *spec = this->GetSpec(cls_id, id);
+		if (spec == nullptr) {
+			StationPickerDrawSprite(x, y, StationType::RoadWaypoint, INVALID_RAILTYPE, _cur_roadtype, RSV_DRIVE_THROUGH_X);
+		} else {
+			DrawRoadStopTile(x, y, _cur_roadtype, spec, StationType::RoadWaypoint, RSV_DRIVE_THROUGH_X);
+		}
+	}
+
+	void FillUsedItems(std::set<PickerItem> &items) override
+	{
+		for (const Waypoint *wp : Waypoint::Iterate()) {
+			if (wp->owner != _local_company || !HasBit(wp->waypoint_flags, WPF_ROAD)) continue;
+			items.insert({0, 0, ROADSTOP_CLASS_WAYP, 0}); // We would need to scan the map to find out if default is used.
+			for (const auto &sm : wp->roadstop_speclist) {
+				if (sm.spec == nullptr) continue;
+				items.insert({sm.grfid, sm.localidx, sm.spec->class_index, sm.spec->index});
+			}
+		}
+	}
+
+	static RoadWaypointPickerCallbacks instance;
+};
+/* static */ RoadWaypointPickerCallbacks RoadWaypointPickerCallbacks::instance;
+
+struct BuildRoadWaypointWindow : public PickerWindow {
+	BuildRoadWaypointWindow(WindowDesc &desc, Window *parent) : PickerWindow(desc, parent, TRANSPORT_ROAD, RoadWaypointPickerCallbacks::instance)
+	{
+		this->ConstructWindow();
+		this->InvalidateData();
+	}
+
+	static inline HotkeyList hotkeys{"buildroadwaypoint", {
+		Hotkey('F', "focus_filter_box", PCWHK_FOCUS_FILTER_BOX),
+	}};
+};
+
+/** Nested widget definition for the build NewGRF road waypoint window */
+static constexpr NWidgetPart _nested_build_road_waypoint_widgets[] = {
+	NWidget(NWID_HORIZONTAL),
+		NWidget(WWT_CLOSEBOX, COLOUR_DARK_GREEN),
+		NWidget(WWT_CAPTION, COLOUR_DARK_GREEN), SetStringTip(STR_WAYPOINT_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_SHADEBOX, COLOUR_DARK_GREEN),
+		NWidget(WWT_DEFSIZEBOX, COLOUR_DARK_GREEN),
+	EndContainer(),
+	NWidget(NWID_HORIZONTAL),
+		NWidgetFunction(MakePickerClassWidgets),
+		NWidgetFunction(MakePickerTypeWidgets),
+	EndContainer(),
+};
+
+static WindowDesc _build_road_waypoint_desc(
+	WDP_AUTO, "build_road_waypoint", 0, 0,
+	WC_BUILD_WAYPOINT, WC_BUILD_TOOLBAR,
+	WindowDefaultFlag::Construction,
+	_nested_build_road_waypoint_widgets,
+	&BuildRoadWaypointWindow::hotkeys
+);
+
+static void ShowBuildRoadWaypointPicker(Window *parent)
+{
+	if (!RoadWaypointPickerCallbacks::instance.IsActive()) return;
+	new BuildRoadWaypointWindow(_build_road_waypoint_desc, parent);
 }
 
 void InitializeRoadGui()
 {
 	_road_depot_orientation = DIAGDIR_NW;
-	_road_station_picker_orientation = DIAGDIR_NW;
+	_roadstop_gui.orientation = DIAGDIR_NW;
+	_waypoint_gui.sel_class = RoadStopClassID::ROADSTOP_CLASS_WAYP;
+	_waypoint_gui.sel_type = 0;
 }
 
 /**
@@ -1311,7 +1753,7 @@ DropDownList GetRoadTypeDropDownList(RoadTramTypes rtts, bool for_replacement, b
 	DropDownList list;
 
 	if (all_option) {
-		list.emplace_back(new DropDownListStringItem(STR_REPLACE_ALL_ROADTYPE, INVALID_ROADTYPE, false));
+		list.push_back(MakeDropDownListStringItem(STR_REPLACE_ALL_ROADTYPE, INVALID_ROADTYPE));
 	}
 
 	Dimension d = { 0, 0 };
@@ -1330,23 +1772,19 @@ DropDownList GetRoadTypeDropDownList(RoadTramTypes rtts, bool for_replacement, b
 
 		const RoadTypeInfo *rti = GetRoadTypeInfo(rt);
 
-		DropDownListParamStringItem *item;
+		SetDParam(0, rti->strings.menu_text);
+		SetDParam(1, rti->max_speed / 2);
 		if (for_replacement) {
-			item = new DropDownListParamStringItem(rti->strings.replace_text, rt, !HasBit(avail_roadtypes, rt));
+			list.push_back(MakeDropDownListStringItem(rti->strings.replace_text, rt, !HasBit(avail_roadtypes, rt)));
 		} else {
 			StringID str = rti->max_speed > 0 ? STR_TOOLBAR_RAILTYPE_VELOCITY : STR_JUST_STRING;
-			DropDownListIconItem *iconitem = new DropDownListIconItem(rti->gui_sprites.build_x_road, PAL_NONE, str, rt, !HasBit(avail_roadtypes, rt));
-			iconitem->SetDimension(d);
-			item = iconitem;
+			list.push_back(MakeDropDownListIconItem(d, rti->gui_sprites.build_x_road, PAL_NONE, str, rt, !HasBit(avail_roadtypes, rt)));
 		}
-		item->SetParam(0, rti->strings.menu_text);
-		item->SetParam(1, rti->max_speed / 2);
-		list.emplace_back(item);
 	}
 
-	if (list.size() == 0) {
+	if (list.empty()) {
 		/* Empty dropdowns are not allowed */
-		list.emplace_back(new DropDownListStringItem(STR_NONE, INVALID_ROADTYPE, true));
+		list.push_back(MakeDropDownListStringItem(STR_NONE, INVALID_ROADTYPE, true));
 	}
 
 	return list;
@@ -1355,7 +1793,7 @@ DropDownList GetRoadTypeDropDownList(RoadTramTypes rtts, bool for_replacement, b
 DropDownList GetScenRoadTypeDropDownList(RoadTramTypes rtts)
 {
 	RoadTypes avail_roadtypes = GetRoadTypes(false);
-	avail_roadtypes = AddDateIntroducedRoadTypes(avail_roadtypes, _date);
+	avail_roadtypes = AddDateIntroducedRoadTypes(avail_roadtypes, TimerGameCalendar::date);
 	RoadTypes used_roadtypes = GetRoadTypes(true);
 
 	/* Filter listed road types */
@@ -1376,17 +1814,15 @@ DropDownList GetScenRoadTypeDropDownList(RoadTramTypes rtts)
 
 		const RoadTypeInfo *rti = GetRoadTypeInfo(rt);
 
+		SetDParam(0, rti->strings.menu_text);
+		SetDParam(1, rti->max_speed / 2);
 		StringID str = rti->max_speed > 0 ? STR_TOOLBAR_RAILTYPE_VELOCITY : STR_JUST_STRING;
-		DropDownListIconItem *item = new DropDownListIconItem(rti->gui_sprites.build_x_road, PAL_NONE, str, rt, !HasBit(avail_roadtypes, rt));
-		item->SetDimension(d);
-		item->SetParam(0, rti->strings.menu_text);
-		item->SetParam(1, rti->max_speed / 2);
-		list.emplace_back(item);
+		list.push_back(MakeDropDownListIconItem(d, rti->gui_sprites.build_x_road, PAL_NONE, str, rt, !HasBit(avail_roadtypes, rt)));
 	}
 
-	if (list.size() == 0) {
+	if (list.empty()) {
 		/* Empty dropdowns are not allowed */
-		list.emplace_back(new DropDownListStringItem(STR_NONE, -1, true));
+		list.push_back(MakeDropDownListStringItem(STR_NONE, -1, true));
 	}
 
 	return list;

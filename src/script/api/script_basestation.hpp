@@ -12,6 +12,7 @@
 
 #include "script_text.hpp"
 #include "script_date.hpp"
+#include "../../station_type.h"
 
 /**
  * Base class for stations and waypoints.
@@ -19,15 +20,9 @@
  */
 class ScriptBaseStation : public ScriptObject {
 public:
-	/**
-	 * Special station IDs for building adjacent/new stations when
-	 * the adjacent/distant join features are enabled.
-	 */
-	enum SpecialStationIDs {
-		STATION_NEW = 0xFFFD,           ///< Build a new station
-		STATION_JOIN_ADJACENT = 0xFFFE, ///< Join an neighbouring station if one exists
-		STATION_INVALID = 0xFFFF,       ///< Invalid station id.
-	};
+	static const StationID STATION_NEW = ::NEW_STATION; ///< Build a new station
+	static const StationID STATION_JOIN_ADJACENT = ::ADJACENT_STATION; ///< Join an neighbouring station if one exists
+	static const StationID STATION_INVALID = ::INVALID_STATION; ///< Invalid station id.
 
 	/**
 	 * Checks whether the given basestation is valid and owned by you.
@@ -43,15 +38,15 @@ public:
 	 * @pre IsValidBaseStation(station_id).
 	 * @return The name of the station.
 	 */
-	static char *GetName(StationID station_id);
+	static std::optional<std::string> GetName(StationID station_id);
 
 	/**
 	 * Set the name this basestation.
 	 * @param station_id The basestation to set the name of.
 	 * @param name The new name of the station (can be either a raw string, or a ScriptText object).
 	 * @pre IsValidBaseStation(station_id).
-	 * @pre name != nullptr && len(name) != 0.
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @pre name != null && len(name) != 0.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_NAME_IS_NOT_UNIQUE
 	 * @return True if the name was changed.
 	 */
@@ -68,9 +63,10 @@ public:
 	static TileIndex GetLocation(StationID station_id);
 
 	/**
-	 * Get the last date a station part was added to this station.
+	 * Get the last calendar-date a station part was added to this station.
 	 * @param station_id The station to look at.
-	 * @return The last date some part of this station was build.
+	 * @return The last calendar-date some part of this station was build.
+	 * @see \ref ScriptCalendarTime
 	 */
 	static ScriptDate::Date GetConstructionDate(StationID station_id);
 };

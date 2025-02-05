@@ -12,18 +12,19 @@
 #include "saveload.h"
 #include "compat/vehicle_sl_compat.h"
 
+#include "../debug.h"
 #include "../vehicle_func.h"
 #include "../train.h"
 #include "../roadveh.h"
 #include "../ship.h"
 #include "../aircraft.h"
+#include "../timetable.h"
 #include "../station_base.h"
 #include "../effectvehicle_base.h"
 #include "../company_base.h"
 #include "../company_func.h"
 #include "../disaster_vehicle.h"
-
-#include <map>
+#include "../economy_base.h"
 
 #include "../safeguards.h"
 
@@ -189,7 +190,7 @@ void UpdateOldAircraft()
 			a->state = FLYING;
 			AircraftNextAirportPos_and_Order(a); // move it to the entry point of the airport
 			GetNewVehiclePosResult gp = GetNewVehiclePos(a);
-			a->tile = 0; // aircraft in air is tile=0
+			a->tile = TileIndex{}; // aircraft in air is tile=0
 
 			/* correct speed of helicopter-rotors */
 			if (a->subtype == AIR_HELICOPTER) a->Next()->Next()->cur_speed = 32;
@@ -197,6 +198,19 @@ void UpdateOldAircraft()
 			/* set new position x,y,z */
 			GetAircraftFlightLevelBounds(a, &a->z_pos, nullptr);
 			SetAircraftPosition(a, gp.x, gp.y, GetAircraftFlightLevel(a));
+		}
+	}
+
+	/* Clear aircraft from loading vehicles, if we bumped them into the air. */
+	for (Station *st : Station::Iterate()) {
+		for (auto iter = st->loading_vehicles.begin(); iter != st->loading_vehicles.end(); /* nothing */) {
+			Vehicle *v = *iter;
+			if (v->type == VEH_AIRCRAFT && !v->current_order.IsType(OT_LOADING)) {
+				iter = st->loading_vehicles.erase(iter);
+				delete v->cargo_payment;
+			} else {
+				++iter;
+			}
 		}
 	}
 }
@@ -236,10 +250,10 @@ static void CheckValidVehicles()
 	}
 }
 
-extern byte _age_cargo_skip_counter; // From misc_sl.cpp
+extern uint8_t _age_cargo_skip_counter; // From misc_sl.cpp
 
-/** Called after load to update coordinates */
-void AfterLoadVehicles(bool part_of_load)
+/** Called after load for phase 1 of vehicle initialisation */
+void AfterLoadVehiclesPhase1(bool part_of_load)
 {
 	for (Vehicle *v : Vehicle::Iterate()) {
 		/* Reinstate the previous pointer */
@@ -263,26 +277,26 @@ void AfterLoadVehicles(bool part_of_load)
 		std::map<Order*, OrderList*> mapping;
 
 		for (Vehicle *v : Vehicle::Iterate()) {
-			if (v->orders.old != nullptr) {
+			if (v->old_orders != nullptr) {
 				if (IsSavegameVersionBefore(SLV_105)) { // Pre-105 didn't save an OrderList
-					if (mapping[v->orders.old] == nullptr) {
+					if (mapping[v->old_orders] == nullptr) {
 						/* This adds the whole shared vehicle chain for case b */
 
 						/* Creating an OrderList here is safe because the number of vehicles
 						 * allowed in these savegames matches the number of OrderLists. As
 						 * such each vehicle can get an OrderList and it will (still) fit. */
 						assert(OrderList::CanAllocateItem());
-						v->orders.list = mapping[v->orders.old] = new OrderList(v->orders.old, v);
+						v->orders = mapping[v->old_orders] = new OrderList(v->old_orders, v);
 					} else {
-						v->orders.list = mapping[v->orders.old];
+						v->orders = mapping[v->old_orders];
 						/* For old games (case a) we must create the shared vehicle chain */
 						if (IsSavegameVersionBefore(SLV_5, 2)) {
-							v->AddToShared(v->orders.list->GetFirstSharedVehicle());
+							v->AddToShared(v->orders->GetFirstSharedVehicle());
 						}
 					}
 				} else { // OrderList was saved as such, only recalculate not saved values
 					if (v->PreviousShared() == nullptr) {
-						v->orders.list->Initialize(v->orders.list->first, v);
+						v->orders->Initialize(v->orders->first, v);
 					}
 				}
 			}
@@ -302,13 +316,13 @@ void AfterLoadVehicles(bool part_of_load)
 		if (IsSavegameVersionBefore(SLV_105)) {
 			/* Before 105 there was no order for shared orders, thus it messed up horribly */
 			for (Vehicle *v : Vehicle::Iterate()) {
-				if (v->First() != v || v->orders.list != nullptr || v->previous_shared != nullptr || v->next_shared == nullptr) continue;
+				if (v->First() != v || v->orders != nullptr || v->previous_shared != nullptr || v->next_shared == nullptr) continue;
 
 				/* As above, allocating OrderList here is safe. */
 				assert(OrderList::CanAllocateItem());
-				v->orders.list = new OrderList(nullptr, v);
+				v->orders = new OrderList(nullptr, v);
 				for (Vehicle *u = v; u != nullptr; u = u->next_shared) {
-					u->orders.list = v->orders.list;
+					u->orders = v->orders;
 				}
 			}
 		}
@@ -375,12 +389,33 @@ void AfterLoadVehicles(bool part_of_load)
 				s->rotation_y_pos = s->y_pos;
 			}
 		}
+
+		if (IsSavegameVersionBefore(SLV_TIMETABLE_START_TICKS)) {
+			/* Convert timetable start from a date to an absolute tick in TimerGameTick::counter. */
+			for (Vehicle *v : Vehicle::Iterate()) {
+				/* If the start date is 0, the vehicle is not waiting to start and can be ignored. */
+				if (v->timetable_start == 0) continue;
+
+				v->timetable_start = GetStartTickFromDate(TimerGameEconomy::Date(v->timetable_start));
+			}
+		}
+
+		if (IsSavegameVersionBefore(SLV_VEHICLE_ECONOMY_AGE)) {
+			/* Set vehicle economy age based on calendar age. */
+			for (Vehicle *v : Vehicle::Iterate()) {
+				v->economy_age = TimerGameEconomy::Date{v->age.base()};
+			}
+		}
 	}
 
 	CheckValidVehicles();
+}
 
+/** Called after load for phase 2 of vehicle initialisation */
+void AfterLoadVehiclesPhase2(bool part_of_load)
+{
 	for (Vehicle *v : Vehicle::Iterate()) {
-		assert(v->first != nullptr);
+		assert(v->First() != nullptr);
 
 		v->trip_occupancy = CalcPercentVehicleFilled(v, nullptr);
 
@@ -401,9 +436,11 @@ void AfterLoadVehicles(bool part_of_load)
 
 					rv->roadtype = Engine::Get(rv->engine_type)->u.road.roadtype;
 					rv->compatible_roadtypes = GetRoadTypeInfo(rv->roadtype)->powered_roadtypes;
+					RoadTramType rtt = GetRoadTramType(rv->roadtype);
 					for (RoadVehicle *u = rv; u != nullptr; u = u->Next()) {
 						u->roadtype = rv->roadtype;
 						u->compatible_roadtypes = rv->compatible_roadtypes;
+						if (GetRoadType(u->tile, rtt) == INVALID_ROADTYPE) SlErrorCorrupt("Road vehicle on invalid road type");
 					}
 
 					RoadVehUpdateCache(rv);
@@ -454,20 +491,46 @@ void AfterLoadVehicles(bool part_of_load)
 				if (Aircraft::From(v)->IsNormalAircraft()) {
 					v->GetImage(v->direction, EIT_ON_MAP, &v->sprite_cache.sprite_seq);
 
-					/* The plane's shadow will have the same image as the plane, but no colour */
+					/* The aircraft's shadow will have the same image as the aircraft, but no colour */
 					Vehicle *shadow = v->Next();
+					if (shadow == nullptr) SlErrorCorrupt("Missing shadow for aircraft");
+
 					shadow->sprite_cache.sprite_seq.CopyWithoutPalette(v->sprite_cache.sprite_seq);
 
 					/* In the case of a helicopter we will update the rotor sprites */
 					if (v->subtype == AIR_HELICOPTER) {
 						Vehicle *rotor = shadow->Next();
+						if (rotor == nullptr) SlErrorCorrupt("Missing rotor for helicopter");
+
 						GetRotorImage(Aircraft::From(v), EIT_ON_MAP, &rotor->sprite_cache.sprite_seq);
 					}
 
 					UpdateAircraftCache(Aircraft::From(v), true);
 				}
 				break;
+
+			case VEH_DISASTER: {
+				auto *dv = DisasterVehicle::From(v);
+				if (dv->subtype == ST_SMALL_UFO && dv->state != 0) {
+					RoadVehicle *u = RoadVehicle::GetIfValid(v->dest_tile.base());
+					if (u != nullptr && u->IsFrontEngine()) {
+						/* Delete UFO targetting a vehicle which is already a target. */
+						if (u->disaster_vehicle != INVALID_VEHICLE && u->disaster_vehicle != dv->index) {
+							delete v;
+							continue;
+						} else {
+							u->disaster_vehicle = dv->index;
+						}
+					}
+				}
+				break;
+			}
+
 			default: break;
+		}
+
+		if (part_of_load && v->unitnumber != 0) {
+			Company::Get(v->owner)->freeunits[v->type].UseID(v->unitnumber);
 		}
 
 		v->UpdateDeltaXY();
@@ -567,27 +630,16 @@ void FixupTrainLengths()
 	}
 }
 
-static uint8  _cargo_days;
-static uint16 _cargo_source;
-static uint32 _cargo_source_xy;
-static uint16 _cargo_count;
-static uint16 _cargo_paid_for;
+static uint8_t  _cargo_periods;
+static StationID _cargo_source;
+static TileIndex _cargo_source_xy;
+static uint16_t _cargo_count;
+static uint16_t _cargo_paid_for;
 static Money  _cargo_feeder_share;
-static uint32 _cargo_loaded_at_xy;
 
 class SlVehicleCommon : public DefaultSaveLoadHandler<SlVehicleCommon, Vehicle> {
 public:
-#if defined(_MSC_VER) && (_MSC_VER == 1915 || _MSC_VER == 1916)
-	/* This table access private members of other classes; they have this
-	 * class as friend. For MSVC CL 19.15 and 19.16 this doesn't work for
-	 * "inline static const", so we are forced to wrap the table in a
-	 * function. CL 19.16 is the latest for VS2017. */
-	inline static const SaveLoad description[] = {{}};
-	SaveLoadTable GetDescription() const override {
-#else
-	inline
-#endif
-	static const SaveLoad description[] = {
+	inline static const SaveLoad description[] = {
 		    SLE_VAR(Vehicle, subtype,               SLE_UINT8),
 
 		    SLE_REF(Vehicle, next,                  REF_VEHICLE_OLD),
@@ -624,7 +676,7 @@ public:
 
 		    SLE_VAR(Vehicle, cargo_type,            SLE_UINT8),
 		SLE_CONDVAR(Vehicle, cargo_subtype,         SLE_UINT8,                   SLV_35, SL_MAX_VERSION),
-		SLEG_CONDVAR("cargo_days", _cargo_days,     SLE_UINT8,                    SL_MIN_VERSION,  SLV_68),
+		SLEG_CONDVAR("cargo_days", _cargo_periods,  SLE_UINT8,                    SL_MIN_VERSION,  SLV_68),
 		SLEG_CONDVAR("cargo_source", _cargo_source, SLE_FILE_U8  | SLE_VAR_U16,   SL_MIN_VERSION,   SLV_7),
 		SLEG_CONDVAR("cargo_source", _cargo_source, SLE_UINT16,                   SLV_7,  SLV_68),
 		SLEG_CONDVAR("cargo_source_xy", _cargo_source_xy, SLE_UINT32,             SLV_44,  SLV_68),
@@ -660,17 +712,20 @@ public:
 		SLE_CONDVAR(Vehicle, current_order.wait_time,     SLE_UINT16,            SLV_67, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, current_order.travel_time,   SLE_UINT16,            SLV_67, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, current_order.max_speed,     SLE_UINT16,           SLV_174, SL_MAX_VERSION),
-		SLE_CONDVAR(Vehicle, timetable_start,       SLE_INT32,                  SLV_129, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, timetable_start,       SLE_FILE_I32 | SLE_VAR_U64, SLV_129, SLV_TIMETABLE_START_TICKS),
+		SLE_CONDVAR(Vehicle, timetable_start,       SLE_UINT64,                 SLV_TIMETABLE_START_TICKS, SL_MAX_VERSION),
 
 		SLE_CONDREF(Vehicle, orders,                REF_ORDER,                    SL_MIN_VERSION, SLV_105),
 		SLE_CONDREF(Vehicle, orders,                REF_ORDERLIST,              SLV_105, SL_MAX_VERSION),
 
 		SLE_CONDVAR(Vehicle, age,                   SLE_FILE_U16 | SLE_VAR_I32,   SL_MIN_VERSION,  SLV_31),
 		SLE_CONDVAR(Vehicle, age,                   SLE_INT32,                   SLV_31, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, economy_age,           SLE_INT32,  SLV_VEHICLE_ECONOMY_AGE, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, max_age,               SLE_FILE_U16 | SLE_VAR_I32,   SL_MIN_VERSION,  SLV_31),
 		SLE_CONDVAR(Vehicle, max_age,               SLE_INT32,                   SLV_31, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, date_of_last_service,  SLE_FILE_U16 | SLE_VAR_I32,   SL_MIN_VERSION,  SLV_31),
 		SLE_CONDVAR(Vehicle, date_of_last_service,  SLE_INT32,                   SLV_31, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, date_of_last_service_newgrf, SLE_INT32,             SLV_NEWGRF_LAST_SERVICE, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, service_interval,      SLE_UINT16,                   SL_MIN_VERSION,  SLV_31),
 		SLE_CONDVAR(Vehicle, service_interval,      SLE_FILE_U32 | SLE_VAR_U16,  SLV_31, SLV_180),
 		SLE_CONDVAR(Vehicle, service_interval,      SLE_UINT16,                 SLV_180, SL_MAX_VERSION),
@@ -694,23 +749,26 @@ public:
 		SLE_CONDVAR(Vehicle, profit_last_year,      SLE_INT64,                   SLV_65, SL_MAX_VERSION),
 		SLEG_CONDVAR("cargo_feeder_share", _cargo_feeder_share, SLE_FILE_I32 | SLE_VAR_I64,  SLV_51,  SLV_65),
 		SLEG_CONDVAR("cargo_feeder_share", _cargo_feeder_share, SLE_INT64,                   SLV_65,  SLV_68),
-		SLEG_CONDVAR("cargo_loaded_at_xy", _cargo_loaded_at_xy, SLE_UINT32,                  SLV_51,  SLV_68),
 		SLE_CONDVAR(Vehicle, value,                 SLE_FILE_I32 | SLE_VAR_I64,   SL_MIN_VERSION,  SLV_65),
 		SLE_CONDVAR(Vehicle, value,                 SLE_INT64,                   SLV_65, SL_MAX_VERSION),
 
-		SLE_CONDVAR(Vehicle, random_bits,           SLE_UINT8,                    SLV_2, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, random_bits,           SLE_FILE_U8 | SLE_VAR_U16,    SLV_2, SLV_EXTEND_VEHICLE_RANDOM),
+		SLE_CONDVAR(Vehicle, random_bits,           SLE_UINT16,                   SLV_EXTEND_VEHICLE_RANDOM, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, waiting_triggers,      SLE_UINT8,                    SLV_2, SL_MAX_VERSION),
 
 		SLE_CONDREF(Vehicle, next_shared,           REF_VEHICLE,                  SLV_2, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, group_id,              SLE_UINT16,                  SLV_60, SL_MAX_VERSION),
 
-		SLE_CONDVAR(Vehicle, current_order_time,    SLE_UINT32,                  SLV_67, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, current_order_time,    SLE_FILE_U32 | SLE_VAR_I32,  SLV_67, SLV_TIMETABLE_TICKS_TYPE),
+		SLE_CONDVAR(Vehicle, current_order_time,    SLE_INT32,                   SLV_TIMETABLE_TICKS_TYPE, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, last_loading_tick,     SLE_UINT64,                   SLV_LAST_LOADING_TICK, SL_MAX_VERSION),
 		SLE_CONDVAR(Vehicle, lateness_counter,      SLE_INT32,                   SLV_67, SL_MAX_VERSION),
+
+		SLE_CONDVAR(Vehicle, depot_unbunching_last_departure, SLE_UINT64,        SLV_DEPOT_UNBUNCHING, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, depot_unbunching_next_departure, SLE_UINT64,        SLV_DEPOT_UNBUNCHING, SL_MAX_VERSION),
+		SLE_CONDVAR(Vehicle, round_trip_time,       SLE_INT32,                   SLV_DEPOT_UNBUNCHING, SL_MAX_VERSION),
 	};
-#if defined(_MSC_VER) && (_MSC_VER == 1915 || _MSC_VER == 1916)
-		return description;
-	}
-#endif
+
 	inline const static SaveLoadCompatTable compat_description = _vehicle_common_sl_compat;
 
 	void Save(Vehicle *v) const override
@@ -764,8 +822,23 @@ public:
 	}
 };
 
+class SlVehicleRoadVehPath : public VectorSaveLoadHandler<SlVehicleRoadVehPath, RoadVehicle, RoadVehPathElement> {
+public:
+	inline static const SaveLoad description[] = {
+		SLE_VAR(RoadVehPathElement, trackdir, SLE_UINT8),
+		SLE_VAR(RoadVehPathElement, tile, SLE_UINT32),
+	};
+	inline const static SaveLoadCompatTable compat_description = {};
+
+	std::vector<RoadVehPathElement> &GetVector(RoadVehicle *rv) const override { return rv->path; }
+};
+
 class SlVehicleRoadVeh : public DefaultSaveLoadHandler<SlVehicleRoadVeh, Vehicle> {
 public:
+	/* RoadVehicle path is stored in std::pair which cannot be directly saved. */
+	static inline std::vector<Trackdir> rv_path_td;
+	static inline std::vector<TileIndex> rv_path_tile;
+
 	inline static const SaveLoad description[] = {
 		  SLEG_STRUCT("common", SlVehicleCommon),
 		      SLE_VAR(RoadVehicle, state,                SLE_UINT8),
@@ -775,11 +848,31 @@ public:
 		      SLE_VAR(RoadVehicle, overtaking_ctr,       SLE_UINT8),
 		      SLE_VAR(RoadVehicle, crashed_ctr,          SLE_UINT16),
 		      SLE_VAR(RoadVehicle, reverse_ctr,          SLE_UINT8),
-		SLE_CONDDEQUE(RoadVehicle, path.td,              SLE_UINT8,                  SLV_ROADVEH_PATH_CACHE, SL_MAX_VERSION),
-		SLE_CONDDEQUE(RoadVehicle, path.tile,            SLE_UINT32,                 SLV_ROADVEH_PATH_CACHE, SL_MAX_VERSION),
+		SLEG_CONDVECTOR("path.td",   rv_path_td,         SLE_UINT8,                  SLV_ROADVEH_PATH_CACHE, SLV_PATH_CACHE_FORMAT),
+		SLEG_CONDVECTOR("path.tile", rv_path_tile,       SLE_UINT32,                 SLV_ROADVEH_PATH_CACHE, SLV_PATH_CACHE_FORMAT),
+		SLEG_CONDSTRUCTLIST("path", SlVehicleRoadVehPath, SLV_PATH_CACHE_FORMAT, SL_MAX_VERSION),
 		  SLE_CONDVAR(RoadVehicle, gv_flags,             SLE_UINT16,                 SLV_139, SL_MAX_VERSION),
 	};
 	inline const static SaveLoadCompatTable compat_description = _vehicle_roadveh_sl_compat;
+
+	static void ConvertPathCache(RoadVehicle &rv)
+	{
+		/* The two vectors should be the same size, but if not we can just ignore the cache and not cause more issues. */
+		if (rv_path_td.size() != rv_path_tile.size()) {
+			Debug(sl, 1, "Found RoadVehicle {} with invalid path cache, ignoring.", rv.index);
+			return;
+		}
+		size_t n = std::min(rv_path_td.size(), rv_path_tile.size());
+		if (n == 0) return;
+
+		rv.path.reserve(n);
+		for (size_t c = 0; c < n; ++c) {
+			rv.path.emplace_back(rv_path_td[c], rv_path_tile[c]);
+		}
+
+		/* Path cache is now taken from back instead of front, so needs reversing. */
+		std::reverse(std::begin(rv.path), std::end(rv.path));
+	}
 
 	void Save(Vehicle *v) const override
 	{
@@ -791,6 +884,9 @@ public:
 	{
 		if (v->type != VEH_ROAD) return;
 		SlObject(v, this->GetLoadDescription());
+		if (!IsSavegameVersionBefore(SLV_ROADVEH_PATH_CACHE) && IsSavegameVersionBefore(SLV_PATH_CACHE_FORMAT)) {
+			ConvertPathCache(*static_cast<RoadVehicle *>(v));
+		}
 	}
 
 	void FixPointers(Vehicle *v) const override
@@ -800,12 +896,25 @@ public:
 	}
 };
 
+class SlVehicleShipPath : public VectorSaveLoadHandler<SlVehicleShipPath, Ship, ShipPathElement> {
+public:
+	inline static const SaveLoad description[] = {
+		SLE_VAR(ShipPathElement, trackdir, SLE_UINT8),
+	};
+	inline const static SaveLoadCompatTable compat_description = {};
+
+	std::vector<ShipPathElement> &GetVector(Ship *s) const override { return s->path; }
+};
+
 class SlVehicleShip : public DefaultSaveLoadHandler<SlVehicleShip, Vehicle> {
 public:
+	static inline std::vector<Trackdir> ship_path_td;
+
 	inline static const SaveLoad description[] = {
 		  SLEG_STRUCT("common", SlVehicleCommon),
 		      SLE_VAR(Ship, state,                     SLE_UINT8),
-		SLE_CONDDEQUE(Ship, path,                      SLE_UINT8,                  SLV_SHIP_PATH_CACHE, SL_MAX_VERSION),
+		SLEG_CONDVECTOR("path", ship_path_td, SLE_UINT8, SLV_SHIP_PATH_CACHE, SLV_PATH_CACHE_FORMAT),
+		SLEG_CONDSTRUCTLIST("path", SlVehicleShipPath, SLV_PATH_CACHE_FORMAT, SL_MAX_VERSION),
 		  SLE_CONDVAR(Ship, rotation,                  SLE_UINT8,                  SLV_SHIP_ROTATION, SL_MAX_VERSION),
 	};
 	inline const static SaveLoadCompatTable compat_description = _vehicle_ship_sl_compat;
@@ -820,6 +929,12 @@ public:
 	{
 		if (v->type != VEH_SHIP) return;
 		SlObject(v, this->GetLoadDescription());
+
+		if (IsSavegameVersionBefore(SLV_PATH_CACHE_FORMAT)) {
+			/* Path cache is now taken from back instead of front, so needs reversing. */
+			Ship *s = static_cast<Ship *>(v);
+			std::transform(std::rbegin(ship_path_td), std::rend(ship_path_td), std::back_inserter(s->path), [](Trackdir trackdir) { return trackdir; });
+		}
 	}
 
 	void FixPointers(Vehicle *v) const override
@@ -916,17 +1031,7 @@ public:
 
 class SlVehicleDisaster : public DefaultSaveLoadHandler<SlVehicleDisaster, Vehicle> {
 public:
-#if defined(_MSC_VER) && (_MSC_VER == 1915 || _MSC_VER == 1916)
-	/* This table access private members of other classes; they have this
-	 * class as friend. For MSVC CL 19.15 and 19.16 this doesn't work for
-	 * "inline static const", so we are forced to wrap the table in a
-	 * function. CL 19.16 is the latest for VS2017. */
-	inline static const SaveLoad description[] = {{}};
-	SaveLoadTable GetDescription() const override {
-#else
-	inline
-#endif
-	static const SaveLoad description[] = {
+	inline static const SaveLoad description[] = {
 		    SLE_REF(Vehicle, next,                  REF_VEHICLE_OLD),
 
 		    SLE_VAR(Vehicle, subtype,               SLE_UINT8),
@@ -945,8 +1050,9 @@ public:
 
 		    SLE_VAR(Vehicle, owner,                 SLE_UINT8),
 		    SLE_VAR(Vehicle, vehstatus,             SLE_UINT8),
-		SLE_CONDVAR(Vehicle, current_order.dest,    SLE_FILE_U8 | SLE_VAR_U16,    SL_MIN_VERSION,   SLV_5),
-		SLE_CONDVAR(Vehicle, current_order.dest,    SLE_UINT16,                   SLV_5, SL_MAX_VERSION),
+		SLE_CONDVARNAME(DisasterVehicle, state, "current_order.dest", SLE_FILE_U8 | SLE_VAR_U16, SL_MIN_VERSION,         SLV_5),
+		SLE_CONDVARNAME(DisasterVehicle, state, "current_order.dest", SLE_UINT16,                SLV_5,                  SLV_DISASTER_VEH_STATE),
+		SLE_CONDVAR(DisasterVehicle,     state,                       SLE_UINT16,                SLV_DISASTER_VEH_STATE, SL_MAX_VERSION),
 
 		    SLE_VAR(Vehicle, sprite_cache.sprite_seq.seq[0].sprite, SLE_FILE_U16 | SLE_VAR_U32),
 		SLE_CONDVAR(Vehicle, age,                   SLE_FILE_U16 | SLE_VAR_I32,   SL_MIN_VERSION,  SLV_31),
@@ -959,10 +1065,7 @@ public:
 		SLE_CONDVAR(DisasterVehicle, big_ufo_destroyer_target,  SLE_UINT32,                 SLV_191, SL_MAX_VERSION),
 		SLE_CONDVAR(DisasterVehicle, flags,                     SLE_UINT8,                  SLV_194, SL_MAX_VERSION),
 	};
-#if defined(_MSC_VER) && (_MSC_VER == 1915 || _MSC_VER == 1916)
-		return description;
-	}
-#endif
+
 	inline const static SaveLoadCompatTable compat_description = _vehicle_disaster_sl_compat;
 
 	void Save(Vehicle *v) const override
@@ -1035,7 +1138,7 @@ struct VEHSChunkHandler : ChunkHandler {
 
 			if (_cargo_count != 0 && IsCompanyBuildableVehicleType(v) && CargoPacket::CanAllocateItem()) {
 				/* Don't construct the packet with station here, because that'll fail with old savegames */
-				CargoPacket *cp = new CargoPacket(_cargo_count, _cargo_days, _cargo_source, _cargo_source_xy, _cargo_loaded_at_xy, _cargo_feeder_share);
+				CargoPacket *cp = new CargoPacket(_cargo_count, _cargo_periods, _cargo_source, _cargo_source_xy, _cargo_feeder_share);
 				v->cargo.Append(cp);
 			}
 

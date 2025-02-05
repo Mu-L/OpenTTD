@@ -10,7 +10,6 @@
 #ifndef SMALLSTACK_TYPE_HPP
 #define SMALLSTACK_TYPE_HPP
 
-#include "smallvec_type.hpp"
 #include <mutex>
 
 /**
@@ -18,7 +17,7 @@
  * redefine operator new/delete. It also never zeroes memory and always reuses
  * it.
  */
-template<typename Titem, typename Tindex, Tindex Tgrowth_step, Tindex Tmax_size>
+template <typename Titem, typename Tindex, Tindex Tgrowth_step, Tindex Tmax_size>
 class SimplePool {
 public:
 	inline SimplePool() : first_unused(0), first_free(0) {}

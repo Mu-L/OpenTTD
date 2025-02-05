@@ -72,8 +72,6 @@ void NetworkGameListRemoveItem(NetworkGameList *remove)
 				prev_item->next = remove->next;
 			}
 
-			/* Remove GRFConfig information */
-			ClearGRFConfigList(&remove->info.grfconfig);
 			delete remove;
 
 			NetworkRebuildHostList();
@@ -99,8 +97,6 @@ void NetworkGameListRemoveExpired()
 			item = item->next;
 			*prev_item = item;
 
-			/* Remove GRFConfig information */
-			ClearGRFConfigList(&remove->info.grfconfig);
 			delete remove;
 		} else {
 			prev_item = &item->next;
@@ -121,10 +117,10 @@ void NetworkAfterNewGRFScan()
 		/* Reset compatibility state */
 		item->info.compatible = item->info.version_compatible;
 
-		for (GRFConfig *c = item->info.grfconfig; c != nullptr; c = c->next) {
-			assert(HasBit(c->flags, GCF_COPY));
+		for (auto &c : item->info.grfconfig) {
+			assert(c->flags.Test(GRFConfigFlag::Copy));
 
-			const GRFConfig *f = FindGRFConfig(c->ident.grfid, FGCM_EXACT, c->ident.md5sum);
+			const GRFConfig *f = FindGRFConfig(c->ident.grfid, FGCM_EXACT, &c->ident.md5sum);
 			if (f == nullptr) {
 				/* Don't know the GRF (anymore), so mark game incompatible. */
 				c->status = GCS_NOT_FOUND;

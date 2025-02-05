@@ -11,6 +11,7 @@
 #define SCRIPT_MARINE_HPP
 
 #include "script_error.hpp"
+#include "../../station_type.h"
 
 /**
  * Class that handles all marine related functions.
@@ -20,6 +21,8 @@ class ScriptMarine : public ScriptObject {
 public:
 	/**
 	 * All marine related error messages.
+	 *
+	 * @see ScriptErrorType
 	 */
 	enum ErrorMessages {
 		/** Base for marine related errors */
@@ -36,6 +39,8 @@ public:
 		BT_DOCK,  ///< Build a dock
 		BT_DEPOT, ///< Build a ship depot
 		BT_BUOY,  ///< Build a buoy
+		BT_LOCK,  ///< Build a lock
+		BT_CANAL, ///< Build a canal
 	};
 
 	/**
@@ -97,7 +102,7 @@ public:
 	 * @param front A tile on the same axis with 'tile' as the depot shall be oriented.
 	 * @pre ScriptMap::IsValidTile(tile).
 	 * @pre ScriptMap::IsValidTile(front).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_AREA_NOT_CLEAR
 	 * @exception ScriptError::ERR_SITE_UNSUITABLE
 	 * @exception ScriptMarine::ERR_MARINE_MUST_BE_BUILT_ON_WATER
@@ -113,7 +118,7 @@ public:
 	 * @param station_id The station to join, ScriptStation::STATION_NEW or ScriptStation::STATION_JOIN_ADJACENT.
 	 * @pre ScriptMap::IsValidTile(tile).
 	 * @pre station_id == ScriptStation::STATION_NEW || station_id == ScriptStation::STATION_JOIN_ADJACENT || ScriptStation::IsValidStation(station_id).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_AREA_NOT_CLEAR
 	 * @exception ScriptError::ERR_SITE_UNSUITABLE
 	 * @exception ScriptStation::ERR_STATION_TOO_CLOSE_TO_ANOTHER_STATION
@@ -126,7 +131,7 @@ public:
 	 * Builds a buoy on tile.
 	 * @param tile The tile where the buoy will be build.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_AREA_NOT_CLEAR
 	 * @exception ScriptError::ERR_SITE_UNSUITABLE
 	 * @exception ScriptStation::ERR_STATION_TOO_MANY_STATIONS
@@ -138,7 +143,7 @@ public:
 	 * Builds a lock on tile.
 	 * @param tile The tile where the lock will be build.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_LAND_SLOPED_WRONG
 	 * @exception ScriptError::ERR_SITE_UNSUITABLE
 	 * @return Whether the lock has been/can be build or not.
@@ -149,7 +154,7 @@ public:
 	 * Builds a canal on tile.
 	 * @param tile The tile where the canal will be build.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_AREA_NOT_CLEAR
 	 * @exception ScriptError::ERR_LAND_SLOPED_WRONG
 	 * @exception ScriptError::ERR_OWNED_BY_ANOTHER_COMPANY
@@ -162,7 +167,7 @@ public:
 	 * Removes a water depot.
 	 * @param tile Any tile of the water depot.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_OWNED_BY_ANOTHER_COMPANY
 	 * @return Whether the water depot has been/can be removed or not.
 	 */
@@ -172,7 +177,7 @@ public:
 	 * Removes a dock.
 	 * @param tile Any tile of the dock.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_OWNED_BY_ANOTHER_COMPANY
 	 * @return Whether the dock has been/can be removed or not.
 	 */
@@ -182,7 +187,7 @@ public:
 	 * Removes a buoy.
 	 * @param tile Any tile of the buoy.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_OWNED_BY_ANOTHER_COMPANY
 	 * @return Whether the buoy has been/can be removed or not.
 	 */
@@ -192,7 +197,7 @@ public:
 	 * Removes a lock.
 	 * @param tile Any tile of the lock.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_OWNED_BY_ANOTHER_COMPANY
 	 * @return Whether the lock has been/can be removed or not.
 	 */
@@ -202,7 +207,7 @@ public:
 	 * Removes a canal.
 	 * @param tile Any tile of the canal.
 	 * @pre ScriptMap::IsValidTile(tile).
-	 * @game @pre Valid ScriptCompanyMode active in scope.
+	 * @game @pre ScriptCompanyMode::IsValid().
 	 * @exception ScriptError::ERR_OWNED_BY_ANOTHER_COMPANY
 	 * @return Whether the canal has been/can be removed or not.
 	 */

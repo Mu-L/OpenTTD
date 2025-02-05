@@ -10,6 +10,7 @@ add_subdirectory(3rdparty)
 add_subdirectory(ai)
 add_subdirectory(blitter)
 add_subdirectory(core)
+add_subdirectory(fontcache)
 add_subdirectory(game)
 add_subdirectory(lang)
 add_subdirectory(linkgraph)
@@ -22,6 +23,8 @@ add_subdirectory(saveload)
 add_subdirectory(sound)
 add_subdirectory(spriteloader)
 add_subdirectory(table)
+add_subdirectory(tests)
+add_subdirectory(timer)
 add_subdirectory(video)
 add_subdirectory(widgets)
 
@@ -29,26 +32,38 @@ add_files(
     viewport_sprite_sorter_sse4.cpp
     CONDITION SSE_FOUND
 )
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    set_compile_flags(
-        viewport_sprite_sorter_sse4.cpp
-        COMPILE_FLAGS -msse4.1)
-endif()
+
+add_files(
+    gfx_layout_icu.cpp
+    gfx_layout_icu.h
+    CONDITION ICU_i18n_FOUND AND HARFBUZZ_FOUND
+)
+
+add_files(
+    soundloader_opus.cpp
+    CONDITION OpusFile_FOUND
+)
 
 add_files(
     aircraft.h
     aircraft_cmd.cpp
+    aircraft_cmd.h
     aircraft_gui.cpp
     airport.cpp
     airport.h
+    airport_cmd.h
     airport_gui.cpp
     animated_tile.cpp
     animated_tile_func.h
+    animated_tile_map.h
     articulated_vehicles.cpp
     articulated_vehicles.h
+    autocompletion.cpp
+    autocompletion.h
     autoreplace.cpp
     autoreplace_base.h
     autoreplace_cmd.cpp
+    autoreplace_cmd.h
     autoreplace_func.h
     autoreplace_gui.cpp
     autoreplace_gui.h
@@ -68,6 +83,7 @@ add_files(
     bridge_map.cpp
     bridge_map.h
     build_vehicle_gui.cpp
+    cachecheck.cpp
     cargo_type.h
     cargoaction.cpp
     cargoaction.h
@@ -84,12 +100,12 @@ add_files(
     clear_cmd.cpp
     clear_func.h
     clear_map.h
-    cmd_helper.h
     command.cpp
     command_func.h
     command_type.h
     company_base.h
     company_cmd.cpp
+    company_cmd.h
     company_func.h
     company_gui.cpp
     company_gui.h
@@ -108,17 +124,15 @@ add_files(
     crashlog.h
     currency.cpp
     currency.h
-    date.cpp
-    date_func.h
     date_gui.cpp
     date_gui.h
-    date_type.h
     debug.cpp
     debug.h
     dedicated.cpp
     depot.cpp
     depot_base.h
     depot_cmd.cpp
+    depot_cmd.h
     depot_func.h
     depot_gui.cpp
     depot_map.h
@@ -127,11 +141,17 @@ add_files(
     direction_type.h
     disaster_vehicle.cpp
     disaster_vehicle.h
+    dock_cmd.h
     dock_gui.cpp
     driver.cpp
     driver.h
+    dropdown.cpp
+    dropdown_common_type.h
+    dropdown_func.h
+    dropdown_type.h
     economy.cpp
     economy_base.h
+    economy_cmd.h
     economy_func.h
     economy_type.h
     effectvehicle.cpp
@@ -141,11 +161,14 @@ add_files(
     elrail_func.h
     engine.cpp
     engine_base.h
+    engine_cmd.h
     engine_func.h
     engine_gui.cpp
     engine_gui.h
     engine_type.h
     error.h
+    error.cpp
+    error_func.h
     error_gui.cpp
     fileio.cpp
     fileio_func.h
@@ -155,7 +178,6 @@ add_files(
     fios_gui.cpp
     fontcache.cpp
     fontcache.h
-    fontcache_internal.h
     fontdetection.h
     framerate_gui.cpp
     framerate_type.h
@@ -169,11 +191,14 @@ add_files(
     gfx_func.h
     gfx_layout.cpp
     gfx_layout.h
+    gfx_layout_fallback.cpp
+    gfx_layout_fallback.h
     gfx_type.h
     gfxinit.cpp
     gfxinit.h
     goal.cpp
     goal_base.h
+    goal_cmd.h
     goal_gui.cpp
     goal_type.h
     graph_gui.cpp
@@ -182,13 +207,15 @@ add_files(
     ground_vehicle.hpp
     group.h
     group_cmd.cpp
+    group_cmd.h
     group_gui.cpp
     group_gui.h
     group_type.h
     gui.h
-    guitimer_func.h
     heightmap.cpp
     heightmap.h
+    help_gui.cpp
+    help_gui.h
     highscore.cpp
     highscore.h
     highscore_gui.cpp
@@ -198,6 +225,7 @@ add_files(
     house_type.h
     industry.h
     industry_cmd.cpp
+    industry_cmd.h
     industry_gui.cpp
     industry_map.h
     industry_type.h
@@ -208,8 +236,16 @@ add_files(
     intro_gui.cpp
     landscape.cpp
     landscape.h
+    landscape_cmd.h
     landscape_type.h
     language.h
+    league_base.h
+    league_cmd.h
+    league_cmd.cpp
+    league_gui.h
+    league_gui.cpp
+    league_type.h
+    library_loader.h
     livery.h
     main_gui.cpp
     map.cpp
@@ -217,6 +253,7 @@ add_files(
     map_type.h
     misc.cpp
     misc_cmd.cpp
+    misc_cmd.h
     misc_gui.cpp
     mixer.cpp
     mixer.h
@@ -224,6 +261,7 @@ add_files(
     music_gui.cpp
     newgrf.cpp
     newgrf.h
+    newgrf_act5.h
     newgrf_airport.cpp
     newgrf_airport.h
     newgrf_airporttiles.cpp
@@ -261,6 +299,8 @@ add_files(
     newgrf_properties.h
     newgrf_railtype.cpp
     newgrf_railtype.h
+    newgrf_roadstop.cpp
+    newgrf_roadstop.h
     newgrf_roadtype.cpp
     newgrf_roadtype.h
     newgrf_sound.cpp
@@ -273,10 +313,12 @@ add_files(
     newgrf_storage.h
     newgrf_text.cpp
     newgrf_text.h
+    newgrf_text_type.h
     newgrf_town.cpp
     newgrf_town.h
     newgrf_townname.cpp
     newgrf_townname.h
+    news_cmd.h
     news_func.h
     news_gui.cpp
     news_gui.h
@@ -284,6 +326,7 @@ add_files(
     object.h
     object_base.h
     object_cmd.cpp
+    object_cmd.h
     object_gui.cpp
     object_map.h
     object_type.h
@@ -293,18 +336,26 @@ add_files(
     order_backup.h
     order_base.h
     order_cmd.cpp
+    order_cmd.h
     order_func.h
     order_gui.cpp
     order_type.h
     osk_gui.cpp
+    palette.cpp
+    palette_func.h
     pbs.cpp
     pbs.h
+    picker_func.h
+    picker_gui.cpp
+    picker_gui.h
     progress.cpp
     progress.h
+    provider_manager.h
     querystring_gui.h
     rail.cpp
     rail.h
     rail_cmd.cpp
+    rail_cmd.h
     rail_gui.cpp
     rail_gui.h
     rail_map.h
@@ -327,6 +378,7 @@ add_files(
     roadstop_base.h
     roadveh.h
     roadveh_cmd.cpp
+    roadveh_cmd.h
     roadveh_gui.cpp
     safeguards.h
     screenshot_gui.cpp
@@ -334,6 +386,7 @@ add_files(
     screenshot.cpp
     screenshot.h
     settings.cpp
+    settings_cmd.h
     settings_func.h
     settings_gui.cpp
     settings_gui.h
@@ -343,31 +396,46 @@ add_files(
     settings_type.h
     ship.h
     ship_cmd.cpp
+    ship_cmd.h
     ship_gui.cpp
     signal.cpp
     signal_func.h
     signal_type.h
+    signature.cpp
+    signature.h
     signs.cpp
     signs_base.h
     signs_cmd.cpp
+    signs_cmd.h
     signs_func.h
     signs_gui.cpp
     signs_type.h
+    slider.cpp
+    slider_func.h
     slope_func.h
     slope_type.h
     smallmap_gui.cpp
     smallmap_gui.h
+    social_integration.cpp
+    social_integration.h
     sortlist_type.h
     sound.cpp
     sound_func.h
     sound_type.h
+    soundloader.cpp
+    soundloader_func.h
+    soundloader_type.h
+    soundloader_raw.cpp
+    soundloader_wav.cpp
     sprite.cpp
     sprite.h
     spritecache.cpp
     spritecache.h
+    spritecache_internal.h
     station.cpp
     station_base.h
     station_cmd.cpp
+    station_cmd.h
     station_func.h
     station_gui.cpp
     station_gui.h
@@ -379,9 +447,9 @@ add_files(
     stdafx.h
     story.cpp
     story_base.h
+    story_cmd.h
     story_gui.cpp
     story_type.h
-    strgen/strgen.h
     string.cpp
     string_base.h
     string_func.h
@@ -390,14 +458,19 @@ add_files(
     stringfilter_type.h
     strings.cpp
     strings_func.h
+    strings_internal.h
     strings_type.h
     subsidy.cpp
     subsidy_base.h
+    subsidy_cmd.h
     subsidy_func.h
     subsidy_gui.cpp
     subsidy_type.h
+    survey.cpp
+    survey.h
     tar_type.h
     terraform_cmd.cpp
+    terraform_cmd.h
     terraform_gui.cpp
     terraform_gui.h
     textbuf.cpp
@@ -419,14 +492,15 @@ add_files(
     tilearea_type.h
     tilehighlight_func.h
     tilehighlight_type.h
-    tilematrix_type.hpp
     timetable.h
     timetable_cmd.cpp
+    timetable_cmd.h
     timetable_gui.cpp
     toolbar_gui.cpp
     toolbar_gui.h
     town.h
     town_cmd.cpp
+    town_cmd.h
     town_gui.cpp
     town_kdtree.h
     town_map.h
@@ -438,22 +512,26 @@ add_files(
     track_type.h
     train.h
     train_cmd.cpp
+    train_cmd.h
     train_gui.cpp
     transparency.h
     transparency_gui.cpp
     transparency_gui.h
     transport_type.h
     tree_cmd.cpp
+    tree_cmd.h
     tree_gui.cpp
     tree_map.h
     tunnel_map.cpp
     tunnel_map.h
     tunnelbridge.h
     tunnelbridge_cmd.cpp
+    tunnelbridge_cmd.h
     tunnelbridge_map.h
     vehicle.cpp
     vehicle_base.h
     vehicle_cmd.cpp
+    vehicle_cmd.h
     vehicle_func.h
     vehicle_gui.cpp
     vehicle_gui.h
@@ -461,7 +539,10 @@ add_files(
     vehicle_type.h
     vehiclelist.cpp
     vehiclelist.h
+    vehiclelist_cmd.h
+    vehiclelist_func.h
     viewport.cpp
+    viewport_cmd.h
     viewport_func.h
     viewport_gui.cpp
     viewport_kdtree.h
@@ -469,13 +550,14 @@ add_files(
     viewport_type.h
     void_cmd.cpp
     void_map.h
-    walltime_func.h
     water.h
     water_cmd.cpp
+    water_cmd.h
     water_map.h
     waypoint.cpp
     waypoint_base.h
     waypoint_cmd.cpp
+    waypoint_cmd.h
     waypoint_func.h
     waypoint_gui.cpp
     widget.cpp

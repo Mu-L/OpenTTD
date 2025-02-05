@@ -185,10 +185,10 @@ static bool _allowSoftware;
 static FVideoDriver_CocoaOpenGL iFVideoDriver_CocoaOpenGL;
 
 
-const char *VideoDriver_CocoaOpenGL::Start(const StringList &param)
+std::optional<std::string_view> VideoDriver_CocoaOpenGL::Start(const StringList &param)
 {
-	const char *err = this->Initialize();
-	if (err != nullptr) return err;
+	auto err = this->Initialize();
+	if (err) return err;
 
 	int bpp = BlitterFactory::GetCurrentBlitter()->GetScreenDepth();
 	if (bpp != 8 && bpp != 32) {
@@ -198,10 +198,15 @@ const char *VideoDriver_CocoaOpenGL::Start(const StringList &param)
 
 	/* Try to allocate GL context. */
 	err = this->AllocateContext(GetDriverParamBool(param, "software"));
-	if (err != nullptr) {
+	if (err) {
 		this->Stop();
 		return err;
 	}
+
+	this->driver_info = GetName();
+	this->driver_info += " (";
+	this->driver_info += OpenGLBackend::Get()->GetDriverName();
+	this->driver_info += ")";
 
 	bool fullscreen = _fullscreen;
 	if (!this->MakeWindow(_cur_resolution.width, _cur_resolution.height)) {
@@ -219,7 +224,7 @@ const char *VideoDriver_CocoaOpenGL::Start(const StringList &param)
 
 	this->is_game_threaded = !GetDriverParamBool(param, "no_threads") && !GetDriverParamBool(param, "no_thread");
 
-	return nullptr;
+	return std::nullopt;
 
 }
 
@@ -234,16 +239,20 @@ void VideoDriver_CocoaOpenGL::Stop()
 
 void VideoDriver_CocoaOpenGL::PopulateSystemSprites()
 {
+	VideoDriver_Cocoa::PopulateSystemSprites();
+
 	OpenGLBackend::Get()->PopulateCursorCache();
 }
 
 void VideoDriver_CocoaOpenGL::ClearSystemSprites()
 {
+	VideoDriver_Cocoa::ClearSystemSprites();
+
 	CGLSetCurrentContext(this->gl_context);
 	OpenGLBackend::Get()->ClearCursorCache();
 }
 
-const char *VideoDriver_CocoaOpenGL::AllocateContext(bool allow_software)
+std::optional<std::string_view> VideoDriver_CocoaOpenGL::AllocateContext(bool allow_software)
 {
 	[ OTTD_CGLLayer setAllowSoftware:allow_software ];
 
@@ -312,7 +321,7 @@ void VideoDriver_CocoaOpenGL::Paint()
 		/* Always push a changed palette to OpenGL. */
 		CGLSetCurrentContext(this->gl_context);
 		OpenGLBackend::Get()->UpdatePalette(_local_palette.palette, _local_palette.first_dirty, _local_palette.count_dirty);
-		if (blitter->UsePaletteAnimation() == Blitter::PALETTE_ANIMATION_BLITTER) {
+		if (blitter->UsePaletteAnimation() == Blitter::PaletteAnimation::Blitter) {
 			blitter->PaletteAnimate(_local_palette);
 		}
 	}

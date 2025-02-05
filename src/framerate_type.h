@@ -1,9 +1,9 @@
 /*
-* This file is part of OpenTTD.
-* OpenTTD is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, version 2.
-* OpenTTD is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-* See the GNU General Public License for more details. You should have received a copy of the GNU General Public License along with OpenTTD. If not, see <http://www.gnu.org/licenses/>.
-*/
+ * This file is part of OpenTTD.
+ * OpenTTD is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, version 2.
+ * OpenTTD is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details. You should have received a copy of the GNU General Public License along with OpenTTD. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 /** @file framerate_type.h
  * Types for recording game performance data.
@@ -44,7 +44,7 @@
  * @note When adding new elements here, make sure to also update all other locations depending on the length and order of this enum.
  * See <em>Adding new measurements</em> above.
  */
-enum PerformanceElement {
+enum PerformanceElement : uint8_t {
 	PFE_FIRST = 0,
 	PFE_GAMELOOP = 0,  ///< Speed of gameloop processing.
 	PFE_GL_ECONOMY,    ///< Time spent processing cargo movement
@@ -77,10 +77,10 @@ enum PerformanceElement {
 	PFE_AI14,          ///< AI execution for player slot 15
 	PFE_MAX,           ///< End of enum, must be last.
 };
-DECLARE_POSTFIX_INCREMENT(PerformanceElement)
+DECLARE_INCREMENT_DECREMENT_OPERATORS(PerformanceElement)
 
 /** Type used to hold a performance timing measurement */
-typedef uint64 TimingMeasurement;
+typedef uint64_t TimingMeasurement;
 
 /**
  * RAII class for measuring simple elements of performance.
@@ -121,5 +121,6 @@ public:
 };
 
 void ShowFramerateWindow();
+void ProcessPendingPerformanceMeasurements();
 
 #endif /* FRAMERATE_TYPE_H */

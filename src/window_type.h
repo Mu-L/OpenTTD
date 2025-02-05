@@ -10,9 +10,19 @@
 #ifndef WINDOW_TYPE_H
 #define WINDOW_TYPE_H
 
+#include "core/convertible_through_base.hpp"
+
+/**
+ * Widget ID.
+ * Even though the ID is signed, actual IDs must be non-negative.
+ * Negative IDs are used for special cases, like denoting 'no widget'.
+ */
+using WidgetID = int;
+
 /** %Window numbers. */
-enum WindowNumberEnum {
+enum WindowNumberEnum : uint8_t {
 	WN_GAME_OPTIONS_AI = 0,          ///< AI settings.
+	WN_GAME_OPTIONS_GS,              ///< GS settings.
 	WN_GAME_OPTIONS_ABOUT,           ///< About window.
 	WN_GAME_OPTIONS_NEWGRF_STATE,    ///< NewGRF settings.
 	WN_GAME_OPTIONS_GAME_OPTIONS,    ///< Game options.
@@ -33,7 +43,7 @@ enum WindowNumberEnum {
 };
 
 /** %Window classes. */
-enum WindowClass {
+enum WindowClass : uint16_t {
 	WC_NONE, ///< No window, redirects to WC_MAIN_WINDOW.
 
 	/**
@@ -161,10 +171,10 @@ enum WindowClass {
 
 
 	/**
-	 * AI settings; %Window numbers:
-	 *   - 0 = #AISettingsWidgets
+	 * Script settings; %Window numbers:
+	 *   - 0 = #ScriptSettingsWidgets
 	 */
-	WC_AI_SETTINGS,
+	WC_SCRIPT_SETTINGS,
 
 	/**
 	 * NewGRF parameters; %Window numbers:
@@ -270,10 +280,10 @@ enum WindowClass {
 	WC_SIGN_LIST,
 
 	/**
-	 * AI list; %Window numbers:
-	 *   - 0 = #AIListWidgets
+	 * Scripts list; %Window numbers:
+	 *   - 0 = #ScriptListWidgets
 	 */
-	WC_AI_LIST,
+	WC_SCRIPT_LIST,
 
 	/**
 	 * Goals list; %Window numbers:
@@ -366,6 +376,12 @@ enum WindowClass {
 	 *   - 0 = #BuildObjectWidgets
 	 */
 	WC_BUILD_OBJECT,
+
+	/**
+	 * Build house; %Window numbers:
+	 *   - 0 = #BuildHouseWidgets
+	 */
+	WC_BUILD_HOUSE,
 
 	/**
 	 * Build vehicle; %Window numbers:
@@ -483,17 +499,16 @@ enum WindowClass {
 	WC_NETWORK_ASK_RELAY,
 
 	/**
+	 * Network ask survey window; %Window numbers:
+	 *  - 0 - #NetworkAskSurveyWidgets
+	 */
+	WC_NETWORK_ASK_SURVEY,
+
+	/**
 	 * Chatbox; %Window numbers:
 	 *   - #DestType = #NetWorkChatWidgets
 	 */
 	WC_SEND_NETWORK_MSG,
-
-	/**
-	 * Company password query; %Window numbers:
-	 *   - 0 = #NetworkCompanyPasswordWidgets
-	 */
-	WC_COMPANY_PASSWORD_WINDOW,
-
 
 	/**
 	 * Industry cargoes chain; %Window numbers:
@@ -562,6 +577,12 @@ enum WindowClass {
 	WC_PERFORMANCE_DETAIL,
 
 	/**
+	 * Industry production history graph; %Window numbers:
+	 *   - #IndustryID = #IndustryProductionGraphWidgets
+	 */
+	WC_INDUSTRY_PRODUCTION,
+
+	/**
 	 * Company infrastructure overview; %Window numbers:
 	 *   - #CompanyID = #CompanyInfrastructureWidgets
 	 */
@@ -596,6 +617,7 @@ enum WindowClass {
 	/**
 	 * Game options window; %Window numbers:
 	 *   - #WN_GAME_OPTIONS_AI = #AIConfigWidgets
+	 *   - #WN_GAME_OPTIONS_GS = #GSConfigWidgets
 	 *   - #WN_GAME_OPTIONS_ABOUT = #AboutWidgets
 	 *   - #WN_GAME_OPTIONS_NEWGRF_STATE = #NewGRFStateWidgets
 	 *   - #WN_GAME_OPTIONS_GAME_OPTIONS = #GameOptionsWidgets
@@ -648,10 +670,10 @@ enum WindowClass {
 
 
 	/**
-	 * AI debug window; %Window numbers:
-	 *   - 0 = #AIDebugWidgets
+	 * Script debug window; %Window numbers:
+	 *   - Ascending value = #ScriptDebugWidgets
 	 */
-	WC_AI_DEBUG,
+	WC_SCRIPT_DEBUG,
 
 	/**
 	 * NewGRF inspect (debug); %Window numbers:
@@ -695,11 +717,17 @@ enum WindowClass {
 	 */
 	WC_SCREENSHOT,
 
+	/*
+	 * Help and manuals window; %Window numbers:
+	 *   - 0 = #HelpWindowWidgets
+	 */
+	WC_HELPWIN,
+
 	WC_INVALID = 0xFFFF, ///< Invalid window.
 };
 
 /** Data value for #Window::OnInvalidateData() of windows with class #WC_GAME_OPTIONS. */
-enum GameOptionsInvalidationData {
+enum GameOptionsInvalidationData : uint8_t {
 	GOID_DEFAULT = 0,
 	GOID_NEWGRF_RESCANNED,       ///< NewGRFs were just rescanned.
 	GOID_NEWGRF_CURRENT_LOADED,  ///< The current list of active NewGRF has been loaded.
@@ -710,11 +738,35 @@ enum GameOptionsInvalidationData {
 
 struct Window;
 
-/** Number to differentiate different windows of the same class */
-typedef int32 WindowNumber;
+/**
+ * Number to differentiate different windows of the same class. This number generally
+ * implicitly passes some information, e.g. the TileIndex or Company associated with
+ * the window. To ease this use, the window number is lenient with what it accepts and
+ * broad with what it returns.
+ *
+ * Anything that converts into a number and ConvertibleThroughBase types will be accepted.
+ * When it's being used it returns int32_t or any other type when that's specifically
+ * requested, e.g. `VehicleType type = window_number` or `GetEngineListHeight(window_number)`
+ * in which the returned value will be a `VehicleType`.
+ */
+struct WindowNumber {
+private:
+	int32_t value = 0;
+public:
+	WindowNumber() = default;
+	WindowNumber(int32_t value) : value(value) {}
+	WindowNumber(ConvertibleThroughBase auto value) : value(value.base()) {}
+
+	/* Automatically convert to int32_t. */
+	operator int32_t() const { return value; }
+
+	/* Automatically convert to any other type that might be requested. */
+	template <typename T> requires (std::is_enum_v<T> || std::is_class_v<T>)
+	operator T() const { return static_cast<T>(value); };
+};
 
 /** State of handling an event. */
-enum EventState {
+enum EventState : uint8_t {
 	ES_HANDLED,     ///< The passed event is handled.
 	ES_NOT_HANDLED, ///< The passed event is not handled.
 };

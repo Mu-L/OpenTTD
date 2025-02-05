@@ -1,5 +1,3 @@
-/* $Id$ */
-
 /*
  * This file is part of OpenTTD.
  * OpenTTD is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, version 2.
@@ -13,10 +11,7 @@
 #define LRUCACHE_HPP
 
 #include <utility>
-#include <list>
-#include <functional>
 #include <unordered_map>
-#include <stdexcept>
 
 /**
  * Size limited cache with a least recently used eviction strategy.
@@ -76,7 +71,7 @@ public:
 			}
 
 			/* Insert new item. */
-			this->data.push_front(std::make_pair(key, item));
+			this->data.emplace_front(key, item);
 			this->lookup.emplace(key, this->data.begin());
 		}
 

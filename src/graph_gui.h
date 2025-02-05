@@ -10,13 +10,15 @@
 #ifndef GRAPH_GUI_H
 #define GRAPH_GUI_H
 
+#include "window_type.h"
+
 void ShowOperatingProfitGraph();
 void ShowIncomeGraph();
 void ShowDeliveredCargoGraph();
 void ShowPerformanceHistoryGraph();
 void ShowCompanyValueGraph();
 void ShowCargoPaymentRates();
-void ShowCompanyLeagueTable();
 void ShowPerformanceRatingDetail();
+void ShowIndustryProductionGraph(WindowNumber window_number);
 
 #endif /* GRAPH_GUI_H */

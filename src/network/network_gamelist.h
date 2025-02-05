@@ -11,11 +11,11 @@
 #define NETWORK_GAMELIST_H
 
 #include "core/address.h"
-#include "core/game_info.h"
+#include "core/network_game_info.h"
 #include "network_type.h"
 
 /** The status a server can be in. */
-enum NetworkGameListStatus {
+enum NetworkGameListStatus : uint8_t {
 	NGLS_OFFLINE, ///< Server is offline (or cannot be queried).
 	NGLS_ONLINE,  ///< Server is online.
 	NGLS_FULL,    ///< Server is full and cannot be queried.
@@ -31,7 +31,7 @@ struct NetworkGameList {
 	std::string connection_string;               ///< Address of the server.
 	NetworkGameListStatus status = NGLS_OFFLINE; ///< Stats of the server.
 	bool manually = false;                       ///< True if the server was added manually.
-	uint8 retries = 0;                           ///< Number of retries (to stop requerying).
+	bool refreshing = false;                     ///< Whether this server is being queried.
 	int version = 0;                             ///< Used to see which servers are no longer available on the Game Coordinator and can be removed.
 	NetworkGameList *next = nullptr;             ///< Next pointer to make a linked game list.
 };

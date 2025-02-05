@@ -11,21 +11,21 @@ add_files(
     date_widget.h
     depot_widget.h
     dock_widget.h
-    dropdown.cpp
-    dropdown_func.h
-    dropdown_type.h
     dropdown_widget.h
     engine_widget.h
     error_widget.h
     fios_widget.h
     framerate_widget.h
+    game_widget.h
     genworld_widget.h
     goal_widget.h
     graph_widget.h
     group_widget.h
+    help_widget.h
     highscore_widget.h
     industry_widget.h
     intro_widget.h
+    league_widget.h
     link_graph_legend_widget.h
     main_widget.h
     misc_widget.h
@@ -39,13 +39,13 @@ add_files(
     object_widget.h
     order_widget.h
     osk_widget.h
+    picker_widget.h
     rail_widget.h
     road_widget.h
     screenshot_widget.h
+    script_widget.h
     settings_widget.h
     sign_widget.h
-    slider.cpp
-    slider_func.h
     smallmap_widget.h
     station_widget.h
     statusbar_widget.h

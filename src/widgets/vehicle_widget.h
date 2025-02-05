@@ -11,7 +11,7 @@
 #define WIDGETS_VEHICLE_WIDGET_H
 
 /** Widgets of the #VehicleViewWindow class. */
-enum VehicleViewWidgets {
+enum VehicleViewWidgets : WidgetID {
 	WID_VV_CAPTION,            ///< Caption of window.
 	WID_VV_VIEWPORT,           ///< Viewport widget.
 	WID_VV_START_STOP,         ///< Start or stop this vehicle, and show information about the current state.
@@ -27,10 +27,11 @@ enum VehicleViewWidgets {
 	WID_VV_SELECT_REFIT_TURN,  ///< Selection widget between 'refit' and 'turn around' buttons.
 	WID_VV_TURN_AROUND,        ///< Turn this vehicle around.
 	WID_VV_FORCE_PROCEED,      ///< Force this vehicle to pass a signal at danger.
+	WID_VV_HONK_HORN,          ///< Honk the vehicles horn (not drawn on UI, only used for hotkey).
 };
 
 /** Widgets of the #RefitWindow class. */
-enum VehicleRefitWidgets {
+enum VehicleRefitWidgets : WidgetID {
 	WID_VR_CAPTION,               ///< Caption of window.
 	WID_VR_VEHICLE_PANEL_DISPLAY, ///< Display with a representation of the vehicle to refit.
 	WID_VR_SHOW_HSCROLLBAR,       ///< Selection widget for the horizontal scrollbar.
@@ -43,7 +44,7 @@ enum VehicleRefitWidgets {
 };
 
 /** Widgets of the #VehicleDetailsWindow class. */
-enum VehicleDetailsWidgets {
+enum VehicleDetailsWidgets : WidgetID {
 	WID_VD_CAPTION,                     ///< Caption of window.
 	WID_VD_TOP_DETAILS,                 ///< Panel with generic details.
 	WID_VD_INCREASE_SERVICING_INTERVAL, ///< Increase the servicing interval.
@@ -60,12 +61,17 @@ enum VehicleDetailsWidgets {
 };
 
 /** Widgets of the #VehicleListWindow class. */
-enum VehicleListWidgets {
-	WID_VL_CAPTION,                  ///< Caption of window.
+enum VehicleListWidgets : WidgetID {
+	WID_VL_CAPTION,                  ///< Caption of window (for non shared orders windows).
+	WID_VL_CAPTION_SHARED_ORDERS,    ///< Caption of window (for shared orders windows).
+	WID_VL_CAPTION_SELECTION,        ///< Selection for caption.
+	WID_VL_ORDER_VIEW,               ///< Button to open order window (for shared orders windows).
 	WID_VL_GROUP_ORDER,              ///< Group order.
 	WID_VL_GROUP_BY_PULLDOWN,        ///< Group by dropdown list.
 	WID_VL_SORT_ORDER,               ///< Sort order.
 	WID_VL_SORT_BY_PULLDOWN,         ///< Sort by dropdown list.
+	WID_VL_FILTER_BY_CARGO,          ///< Cargo filter dropdown list.
+	WID_VL_FILTER_BY_CARGO_SEL,      ///< Cargo filter dropdown list panel selector.
 	WID_VL_LIST,                     ///< List of the vehicles.
 	WID_VL_SCROLLBAR,                ///< Scrollbar for the list.
 	WID_VL_HIDE_BUTTONS,             ///< Selection to hide the buttons.

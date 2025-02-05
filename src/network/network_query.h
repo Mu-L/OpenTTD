@@ -13,16 +13,16 @@
 #include "network_internal.h"
 
 /** Class for handling the client side of quering a game server. */
-class QueryNetworkGameSocketHandler : public ZeroedMemoryAllocator, public NetworkGameSocketHandler {
+class QueryNetworkGameSocketHandler : public NetworkGameSocketHandler {
 private:
 	static std::vector<std::unique_ptr<QueryNetworkGameSocketHandler>> queries; ///< Pending queries.
 	std::string connection_string; ///< Address we are connected to.
 
 protected:
-	NetworkRecvStatus Receive_SERVER_FULL(Packet *p) override;
-	NetworkRecvStatus Receive_SERVER_BANNED(Packet *p) override;
-	NetworkRecvStatus Receive_SERVER_ERROR(Packet *p) override;
-	NetworkRecvStatus Receive_SERVER_GAME_INFO(Packet *p) override;
+	NetworkRecvStatus Receive_SERVER_FULL(Packet &p) override;
+	NetworkRecvStatus Receive_SERVER_BANNED(Packet &p) override;
+	NetworkRecvStatus Receive_SERVER_ERROR(Packet &p) override;
+	NetworkRecvStatus Receive_SERVER_GAME_INFO(Packet &p) override;
 
 	NetworkRecvStatus SendGameInfo();
 

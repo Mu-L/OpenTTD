@@ -19,17 +19,17 @@
 /* virtual */ PoolBase::~PoolBase()
 {
 	PoolVector *pools = PoolBase::GetPools();
-	pools->erase(std::find(pools->begin(), pools->end(), this));
-	if (pools->size() == 0) delete pools;
+	pools->erase(std::ranges::find(*pools, this));
+	if (pools->empty()) delete pools;
 }
 
 /**
  * Clean all pools of given type.
  * @param pt pool types to clean.
  */
-/* static */ void PoolBase::Clean(PoolType pt)
+/* static */ void PoolBase::Clean(PoolTypes pt)
 {
 	for (PoolBase *pool : *PoolBase::GetPools()) {
-		if (pool->type & pt) pool->CleanPool();
+		if (pt.Test(pool->type)) pool->CleanPool();
 	}
 }

@@ -1,9 +1,9 @@
 /*
-* This file is part of OpenTTD.
-* OpenTTD is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, version 2.
-* OpenTTD is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-* See the GNU General Public License for more details. You should have received a copy of the GNU General Public License along with OpenTTD. If not, see <http://www.gnu.org/licenses/>.
-*/
+ * This file is part of OpenTTD.
+ * OpenTTD is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, version 2.
+ * OpenTTD is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details. You should have received a copy of the GNU General Public License along with OpenTTD. If not, see <http://www.gnu.org/licenses/>.
+ */
 
 /* @file midi.h Declarations for MIDI data */
 
@@ -14,13 +14,13 @@
 
 /** Header of a Stanard MIDI File */
 struct SMFHeader {
-	uint16 format;
-	uint16 tracks;
-	uint16 tickdiv;
+	uint16_t format;
+	uint16_t tracks;
+	uint16_t tickdiv;
 };
 
 /** MIDI status byte codes */
-enum MidiStatus {
+enum MidiStatus : uint8_t {
 	/* Bytes with top bit unset are data bytes i.e. not status bytes */
 	/* Channel status messages, require channel number in lower nibble */
 	MIDIST_NOTEOFF     = 0x80,
@@ -55,7 +55,7 @@ enum MidiStatus {
  * MIDI controller numbers.
  * Complete list per General MIDI, missing values are not defined.
  */
-enum MidiController {
+enum MidiController : uint8_t {
 	/* Standard continuous controllers (MSB control) */
 	MIDICT_BANKSELECT        =   0,
 	MIDICT_MODWHEEL          =   1,
@@ -141,7 +141,7 @@ enum MidiController {
 
 
 /** Well-known MIDI system exclusive message values for use with the MidiGetStandardSysexMessage function. */
-enum class MidiSysexMessage {
+enum class MidiSysexMessage : uint8_t {
 	/** Reset device to General MIDI defaults */
 	ResetGM,
 	/** Reset device to (Roland) General Standard defaults */
@@ -152,6 +152,6 @@ enum class MidiSysexMessage {
 	RolandSetReverb,
 };
 
-const byte *MidiGetStandardSysexMessage(MidiSysexMessage msg, size_t &length);
+const uint8_t *MidiGetStandardSysexMessage(MidiSysexMessage msg, size_t &length);
 
 #endif /* MUSIC_MIDI_H */

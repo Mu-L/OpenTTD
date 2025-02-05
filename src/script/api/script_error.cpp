@@ -23,14 +23,14 @@ ScriptError::ScriptErrorMapString ScriptError::error_map_string = ScriptError::S
 	return ScriptObject::GetLastError();
 }
 
-/* static */ char *ScriptError::GetLastErrorString()
+/* static */ std::optional<std::string> ScriptError::GetLastErrorString()
 {
-	return stredup((*error_map_string.find(ScriptError::GetLastError())).second);
+	return (*error_map_string.find(ScriptError::GetLastError())).second;
 }
 
 /* static */ ScriptErrorType ScriptError::StringToError(StringID internal_string_id)
 {
-	uint index = GetStringIndex(internal_string_id);
+	StringIndexInTab index = GetStringIndex(internal_string_id);
 	switch (GetStringTab(internal_string_id)) {
 		case TEXT_TAB_NEWGRF_START:
 		case TEXT_TAB_GAMESCRIPT_START:
@@ -38,7 +38,7 @@ ScriptError::ScriptErrorMapString ScriptError::error_map_string = ScriptError::S
 
 		case TEXT_TAB_SPECIAL:
 			if (index < 0xE4) break; // Player name
-			FALLTHROUGH;
+			[[fallthrough]];
 
 		case TEXT_TAB_TOWN:
 			if (index < 0xC0) break; // Town name

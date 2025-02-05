@@ -11,15 +11,21 @@
 #define TEXTFILE_TYPE_H
 
 /** Additional text files accompanying Tar archives */
-enum TextfileType {
-	TFT_BEGIN,
+enum TextfileType : uint8_t {
+	TFT_CONTENT_BEGIN,
 
-	TFT_README = TFT_BEGIN, ///< NewGRF readme
-	TFT_CHANGELOG,          ///< NewGRF changelog
-	TFT_LICENSE,            ///< NewGRF license
+	TFT_README = TFT_CONTENT_BEGIN, ///< Content readme
+	TFT_CHANGELOG,                  ///< Content changelog
+	TFT_LICENSE,                    ///< Content license
+
+	TFT_CONTENT_END, // This marker is used to generate the above three buttons in sequence by various of places in the code.
+
+	TFT_SURVEY_RESULT = TFT_CONTENT_END, ///< Survey result (preview)
+	TFT_GAME_MANUAL,                ///< Game manual/documentation file
 
 	TFT_END,
 };
-DECLARE_POSTFIX_INCREMENT(TextfileType)
+DECLARE_INCREMENT_DECREMENT_OPERATORS(TextfileType)
+DECLARE_ENUM_AS_ADDABLE(TextfileType)
 
 #endif /* TEXTFILE_TYPE_H */

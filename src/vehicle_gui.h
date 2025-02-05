@@ -12,6 +12,8 @@
 
 #include "window_type.h"
 #include "vehicle_type.h"
+#include "vehicle_gui_base.h"
+#include "vehiclelist.h"
 #include "order_type.h"
 #include "station_type.h"
 #include "engine_type.h"
@@ -20,15 +22,16 @@
 void ShowVehicleRefitWindow(const Vehicle *v, VehicleOrderID order, Window *parent, bool auto_refit = false);
 
 /** The tabs in the train details window */
-enum TrainDetailsWindowTabs {
+enum TrainDetailsWindowTabs : uint8_t {
 	TDW_TAB_CARGO = 0, ///< Tab with cargo carried by the vehicles
 	TDW_TAB_INFO,      ///< Tab with name and value of the vehicles
 	TDW_TAB_CAPACITY,  ///< Tab with cargo capacity of the vehicles
 	TDW_TAB_TOTALS,    ///< Tab with sum of total cargo transported
 };
+DECLARE_ENUM_AS_ADDABLE(TrainDetailsWindowTabs)
 
 /** Special values for vehicle-related windows for the data parameter of #InvalidateWindowData. */
-enum VehicleInvalidateWindowData {
+enum VehicleInvalidateWindowData : int {
 	VIWD_REMOVE_ALL_ORDERS = -1, ///< Removed / replaced all orders (after deleting / sharing).
 	VIWD_MODIFY_ORDERS     = -2, ///< Other order modifications.
 	VIWD_CONSIST_CHANGED   = -3, ///< Vehicle composition was changed.
@@ -38,17 +41,20 @@ enum VehicleInvalidateWindowData {
 /** Extra information about refitted cargo and capacity */
 struct TestedEngineDetails {
 	Money cost;           ///< Refit cost
-	CargoID cargo;        ///< Cargo type
+	CargoType cargo;        ///< Cargo type
 	uint capacity;        ///< Cargo capacity
-	uint16 mail_capacity; ///< Mail capacity if available
+	uint16_t mail_capacity; ///< Mail capacity if available
+	CargoArray all_capacities{}; ///< Capacities for all cargoes
+
+	void FillDefaultCapacities(const Engine *e);
 };
 
 int DrawVehiclePurchaseInfo(int left, int right, int y, EngineID engine_number, TestedEngineDetails &te);
 
-void DrawTrainImage(const Train *v, int left, int right, int y, VehicleID selection, EngineImageType image_type, int skip, VehicleID drag_dest = INVALID_VEHICLE);
-void DrawRoadVehImage(const Vehicle *v, int left, int right, int y, VehicleID selection, EngineImageType image_type, int skip = 0);
-void DrawShipImage(const Vehicle *v, int left, int right, int y, VehicleID selection, EngineImageType image_type);
-void DrawAircraftImage(const Vehicle *v, int left, int right, int y, VehicleID selection, EngineImageType image_type);
+void DrawTrainImage(const Train *v, const Rect &r, VehicleID selection, EngineImageType image_type, int skip, VehicleID drag_dest = INVALID_VEHICLE);
+void DrawRoadVehImage(const Vehicle *v, const Rect &r, VehicleID selection, EngineImageType image_type, int skip = 0);
+void DrawShipImage(const Vehicle *v, const Rect &r, VehicleID selection, EngineImageType image_type);
+void DrawAircraftImage(const Vehicle *v, const Rect &r, VehicleID selection, EngineImageType image_type);
 
 void ShowBuildVehicleWindow(TileIndex tile, VehicleType type);
 
@@ -65,7 +71,7 @@ void ShowVehicleListWindow(CompanyID company, VehicleType vehicle_type, TileInde
  * @param type the vehicle type to look at
  * @return the height
  */
-static inline uint GetVehicleHeight(VehicleType type)
+inline uint GetVehicleHeight(VehicleType type)
 {
 	return (type == VEH_TRAIN || type == VEH_ROAD) ? 14 : 24;
 }
@@ -88,7 +94,7 @@ VehicleCellSize GetVehicleImageCellSize(VehicleType type, EngineImageType image_
  * @return corresponding window class
  * @note works only for company buildable vehicle types
  */
-static inline WindowClass GetWindowClassForVehicleType(VehicleType vt)
+inline WindowClass GetWindowClassForVehicleType(VehicleType vt)
 {
 	switch (vt) {
 		default: NOT_REACHED();
@@ -102,11 +108,14 @@ static inline WindowClass GetWindowClassForVehicleType(VehicleType vt)
 /* Unified window procedure */
 void ShowVehicleViewWindow(const Vehicle *v);
 bool VehicleClicked(const Vehicle *v);
+bool VehicleClicked(VehicleList::const_iterator begin, VehicleList::const_iterator end);
+bool VehicleClicked(const GUIVehicleGroup &vehgroup);
 void StartStopVehicle(const Vehicle *v, bool texteffect);
 
 Vehicle *CheckClickOnVehicle(const struct Viewport *vp, int x, int y);
+void StopGlobalFollowVehicle(const Vehicle *v);
 
-void DrawVehicleImage(const Vehicle *v, int left, int right, int y, VehicleID selection, EngineImageType image_type, int skip);
+void DrawVehicleImage(const Vehicle *v, const Rect &r, VehicleID selection, EngineImageType image_type, int skip);
 void SetMouseCursorVehicle(const Vehicle *v, EngineImageType image_type);
 
 #endif /* VEHICLE_GUI_H */

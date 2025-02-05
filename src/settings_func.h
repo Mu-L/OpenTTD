@@ -10,14 +10,14 @@
 #ifndef SETTINGS_FUNC_H
 #define SETTINGS_FUNC_H
 
-#include "core/smallvec_type.hpp"
 #include "company_type.h"
 #include "string_type.h"
+#include "newgrf_config.h"
 
 struct IniFile;
 
 void IConsoleSetSetting(const char *name, const char *value, bool force_newgame = false);
-void IConsoleSetSetting(const char *name, int32 value);
+void IConsoleSetSetting(const char *name, int32_t value);
 void IConsoleGetSetting(const char *name, bool force_newgame = false);
 void IConsoleListSettings(const char *prefilter);
 
@@ -28,8 +28,8 @@ void IniLoadWindowSettings(IniFile &ini, const char *grpname, void *desc);
 void IniSaveWindowSettings(IniFile &ini, const char *grpname, void *desc);
 
 StringList GetGRFPresetList();
-struct GRFConfig *LoadGRFPresetFromConfig(const char *config_name);
-void SaveGRFPresetToConfig(const char *config_name, struct GRFConfig *config);
+GRFConfigList LoadGRFPresetFromConfig(const char *config_name);
+void SaveGRFPresetToConfig(const char *config_name, GRFConfigList &config);
 void DeleteGRFPresetFromConfig(const char *config_name);
 
 void SetDefaultCompanySettings(CompanyID cid);

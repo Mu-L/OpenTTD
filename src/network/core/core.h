@@ -13,13 +13,14 @@
 #define NETWORK_CORE_CORE_H
 
 #include "../../newgrf_config.h"
+#include "../network_crypto.h"
 #include "config.h"
 
 bool NetworkCoreInitialize();
 void NetworkCoreShutdown();
 
 /** Status of a network client; reasons why a client has quit */
-enum NetworkRecvStatus {
+enum NetworkRecvStatus : uint8_t {
 	NETWORK_RECV_STATUS_OKAY,             ///< Everything is okay.
 	NETWORK_RECV_STATUS_DESYNC,           ///< A desync did occur.
 	NETWORK_RECV_STATUS_NEWGRF_MISMATCH,  ///< We did not have the required NewGRFs.
@@ -41,14 +42,19 @@ struct Packet;
  */
 class NetworkSocketHandler {
 private:
-	bool has_quit; ///< Whether the current client has quit/send a bad packet
+	bool has_quit = false; ///< Whether the current client has quit/send a bad packet
+
+protected:
+	friend struct Packet;
+	std::unique_ptr<class NetworkEncryptionHandler> receive_encryption_handler = nullptr; ///< The handler for decrypting received packets.
+	std::unique_ptr<class NetworkEncryptionHandler> send_encryption_handler = nullptr; ///< The handler for encrypting sent packets.
 
 public:
 	/** Create a new unbound socket */
-	NetworkSocketHandler() { this->has_quit = false; }
+	NetworkSocketHandler() = default;
 
 	/** Close the socket when destructing the socket handler */
-	virtual ~NetworkSocketHandler() {}
+	virtual ~NetworkSocketHandler() = default;
 
 	/**
 	 * Mark the connection as closed.

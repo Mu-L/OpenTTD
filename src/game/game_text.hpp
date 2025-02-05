@@ -10,9 +10,28 @@
 #ifndef GAME_TEXT_HPP
 #define GAME_TEXT_HPP
 
-#include "../core/smallvec_type.hpp"
+#include "../strings_type.h"
 
-const char *GetGameStringPtr(uint id);
+struct StringParam {
+	enum ParamType : uint8_t {
+		UNUSED,
+		RAW_STRING,
+		STRING,
+		OTHER
+	};
+
+	ParamType type;
+	uint8_t consumes;
+	const char *cmd;
+
+	StringParam(ParamType type, uint8_t consumes, const char *cmd) : type(type), consumes(consumes), cmd(cmd) {}
+};
+using StringParams = std::vector<StringParam>;
+using StringParamsList = std::vector<StringParams>;
+
+const char *GetGameStringPtr(StringIndexInTab id);
+const StringParams &GetGameStringParams(StringIndexInTab id);
+const std::string &GetGameStringName(StringIndexInTab id);
 void RegisterGameTranslation(class Squirrel *engine);
 void ReconsiderGameScriptLanguage();
 
@@ -37,6 +56,7 @@ struct GameStrings {
 	std::vector<LanguageStrings> raw_strings;      ///< The raw strings per language, first must be English/the master language!.
 	std::vector<LanguageStrings> compiled_strings; ///< The compiled strings per language, first must be English/the master language!.
 	StringList string_names;                       ///< The names of the compiled strings.
+	StringParamsList string_params;                ///< The parameters for the strings.
 
 	void Compile();
 

@@ -24,7 +24,10 @@ BEGIN {
 }
 
 {
+	# replace Script with AI/GS, except for ScriptErrorType
 	gsub(/Script/, api)
+	gsub(/AIErrorType/, "ScriptErrorType")
+	gsub(/GSErrorType/, "ScriptErrorType")
 }
 
 {
@@ -133,6 +136,16 @@ BEGIN {
 	next
 }
 
+# Convert/unify type names
+{
+	gsub(/\<SQInteger\>/, "int")
+	gsub(/\<SquirrelTable\>/, "table")
+	gsub(/\<u?int[0-9]*(_t)?\>/, "int")
+	gsub(/\<HSQOBJECT\>/, "object")
+	gsub(/std::optional<std::string>/, "string")
+	gsub(/(const )?std::string *[*&]?/, "string ")
+}
+
 # Store comments
 /\/\*\*.*\*\//   { comment_buffer = $0; comment = "false"; next; }
 /\/\*.*\*\//     { comment_buffer = ""; comment = "false"; next; }
@@ -198,7 +211,7 @@ BEGIN {
 }
 
 # Maybe the end of the class, if so we can start with the Squirrel export pretty soon
-/};/ {
+/^[ 	]*};/ {
 	comment_buffer = ""
 	cls_level--
 	if (cls_level != 0) {
@@ -245,7 +258,7 @@ BEGIN {
 }
 
 # Add a const (non-enum) value
-/^[ 	]*static const \w+ \w+ = -?\(?\w*\)?\w+;/ {
+/^[ 	]*static const \w+ \w+ = [^;]+;/ {
 	if (api_selected == "") api_selected = cls_in_api
 	if (api_selected == "false") {
 		api_selected = ""

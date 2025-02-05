@@ -11,9 +11,10 @@
     - 1.6) [OpenTTD directories](#16-openttd-directories)
     - 1.7) [Compiling OpenTTD](#17-compiling-openttd)
 - 2.0) [Contact and community](#20-contact-and-community)
-    - 2.1) [Contributing to OpenTTD](#21-contributing-to-openttd)
-    - 2.2) [Reporting bugs](#22-reporting-bugs)
-    - 2.3) [Translating](#23-translating)
+    - 2.1) [Multiplayer games](#21-multiplayer-games)
+    - 2.2) [Contributing to OpenTTD](#22-contributing-to-openttd)
+    - 2.3) [Reporting bugs](#23-reporting-bugs)
+    - 2.4) [Translating](#24-translating)
 - 3.0) [Licensing](#30-licensing)
 - 4.0) [Credits](#40-credits)
 
@@ -77,9 +78,9 @@ For some platforms, you will need to refer to [the installation guide](https://w
 The free data files, split into OpenGFX for graphics, OpenSFX for sounds and
 OpenMSX for music can be found at:
 
-- https://www.openttd.org/downloads/opengfx-releases/ for OpenGFX
-- https://www.openttd.org/downloads/opensfx-releases/ for OpenSFX
-- https://www.openttd.org/downloads/openmsx-releases/ for OpenMSX
+- [OpenGFX](https://www.openttd.org/downloads/opengfx-releases/latest)
+- [OpenSFX](https://www.openttd.org/downloads/opensfx-releases/latest)
+- [OpenMSX](https://www.openttd.org/downloads/openmsx-releases/latest)
 
 Please follow the readme of these packages about the installation procedure.
 The Windows installer can optionally download and install these packages.
@@ -116,35 +117,15 @@ Most types of add-on content can be downloaded within OpenTTD via the 'Check Onl
 
 Add-on content can also be installed manually, but that's more complicated; the [OpenTTD wiki](https://wiki.openttd.org/) may offer help with that, or the [OpenTTD directory structure guide](./docs/directory_structure.md).
 
-### 1.5.1) AI opponents
 
-OpenTTD comes without AI opponents, so if you want to play with AIs you have to download them.
+### 1.5.1) Social Integration
 
-The easiest way is via the 'Check Online Content' button in the main menu.
+OpenTTD has the ability to load plugins to integrate with Social Platforms like Steam, Discord, etc.
 
-You can select some AIs that you think are compatible with your playing style.
+To enable such integration, the plugin for the specific platform has to be downloaded and stored in the `social_integration` folder.
 
-AI help and discussions may also be found in the [AI section of the forum](https://www.tt-forums.net/viewforum.php?f=65).
+See [OpenTTD's website](https://www.openttd.org), under Downloads, for what plugins are available.
 
-### 1.5.2) Scenarios and height maps
-
-Scenarios and heightmaps can be added via the 'Check Online Content' button in the main menu.
-
-### 1.5.3) NewGRFs
-
-A wide range of add-content is available as NewGRFs, including vehicles, industries, stations, landscape objects, town names and more.
-
-NewGRFs can be added via the 'Check Online Content' button in the main menu.
-
-See also the wiki [guide to NewGRFs](https://wiki.openttd.org/en/Manual/NewGRF) and [the forum graphics development section](https://www.tt-forums.net/viewforum.php?f=66).
-
-### 1.5.4) Game scripts
-
-Game scripts can provide additional challenges or changes to the standard OpenTTD gameplay, for example setting transport goals, or changing town growth behaviour.
-
-Game scripts can be added via the 'Check Online Content' button in the main menu.
-
-See also the wiki [guide to game scripts](https://wiki.openttd.org/en/Manual/Game%20script) and [the forum graphics game script section](https://www.tt-forums.net/viewforum.php?f=65).
 
 ### 1.6) OpenTTD directories
 
@@ -162,8 +143,9 @@ If you want to compile OpenTTD from source, instructions can be found in [COMPIL
 'Official' channels
 
 - [OpenTTD website](https://www.openttd.org)
+- [OpenTTD official Discord](https://discord.gg/openttd)
 - IRC chat using #openttd on irc.oftc.net [more info about our irc channel](https://wiki.openttd.org/en/Development/IRC%20channel)
-- [OpenTTD on Github](https://github.com/openTTD/) for code repositories and for reporting issues
+- [OpenTTD on Github](https://github.com/OpenTTD/) for code repositories and for reporting issues
 - [forum.openttd.org](https://forum.openttd.org/) - the primary community forum site for discussing OpenTTD and related games
 - [OpenTTD wiki](https://wiki.openttd.org/) community-maintained wiki, including topics like gameplay guide, detailed explanation of some game mechanics, how to use add-on content (mods) and much more
 
@@ -172,12 +154,19 @@ If you want to compile OpenTTD from source, instructions can be found in [COMPIL
 - the OpenTTD wiki has a [page listing OpenTTD communities](https://wiki.openttd.org/en/Community/Community) including some in languages other than English
 
 
-### 2.1) Contributing to OpenTTD
+### 2.1) Multiplayer games
+
+You can play OpenTTD with others, either cooperatively or competitively.
+
+See the [multiplayer documentation](./docs/multiplayer.md) for more details.
+
+
+### 2.2) Contributing to OpenTTD
 
 We welcome contributors to OpenTTD.  More information for contributors can be found in [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 
-### 2.2) Reporting bugs
+### 2.3) Reporting bugs
 
 Good bug reports are very helpful.  We have a [guide to reporting bugs](./CONTRIBUTING.md#bug-reports) to help with this.
 
@@ -185,7 +174,7 @@ Desyncs in multiplayer are complex to debug and report (some software developmen
 Instructions can be found in [debugging and reporting desyncs](./docs/debugging_desyncs.md).
 
 
-### 2.3) Translating
+### 2.4) Translating
 
 OpenTTD is translated into many languages.  Translations are added and updated via the [online translation tool](https://translator.openttd.org).
 
@@ -202,12 +191,29 @@ See `src/3rdparty/squirrel/COPYRIGHT` for the complete license text.
 The md5 implementation in `src/3rdparty/md5` is licensed under the Zlib license.
 See the comments in the source files in `src/3rdparty/md5` for the complete license text.
 
-The implementations of Posix `getaddrinfo` and `getnameinfo` for OS/2 in `src/3rdparty/os2` are distributed partly under the GNU Lesser General Public License 2.1, and partly under the (3-clause) BSD license.
-The exact licensing terms can be found in `src/3rdparty/os2/getaddrinfo.c` resp. `src/3rdparty/os2/getnameinfo.c`.
-
 The fmt implementation in `src/3rdparty/fmt` is licensed under the MIT license.
 See `src/3rdparty/fmt/LICENSE.rst` for the complete license text.
 
+The nlohmann json implementation in `src/3rdparty/nlohmann` is licensed under the MIT license.
+See `src/3rdparty/nlohmann/LICENSE.MIT` for the complete license text.
+
+The OpenGL API in `src/3rdparty/opengl` is licensed under the MIT license.
+See `src/3rdparty/opengl/khrplatform.h` for the complete license text.
+
+The catch2 implementation in `src/3rdparty/catch2` is licensed under the Boost Software License, Version 1.0.
+See `src/3rdparty/catch2/LICENSE.txt` for the complete license text.
+
+The icu scriptrun implementation in `src/3rdparty/icu` is licensed under the Unicode license.
+See `src/3rdparty/icu/LICENSE` for the complete license text.
+
+The monocypher implementation in `src/3rdparty/monocypher` is licensed under the 2-clause BSD and CC-0 license.
+See `src/3rdparty/monocypher/LICENSE.md` for the complete license text.
+
+The OpenTTD Social Integration API in `src/3rdparty/openttd_social_integration_api` is licensed under the MIT license.
+See `src/3rdparty/openttd_social_integration_api/LICENSE` for the complete license text.
+
+The atomic datatype support detection in `cmake/3rdparty/llvm/CheckAtomic.cmake` is licensed under the Apache 2.0 license.
+See `cmake/3rdparty/llvm/LICENSE.txt` for the complete license text.
 
 ## 4.0 Credits
 

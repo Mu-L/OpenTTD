@@ -22,7 +22,9 @@
 #include "company_base.h"
 #include "core/random_func.hpp"
 #include "newgrf_generic.h"
-#include "date_func.h"
+#include "timer/timer_game_tick.h"
+#include "tree_cmd.h"
+#include "landscape_cmd.h"
 
 #include "table/strings.h"
 #include "table/tree_land.h"
@@ -35,14 +37,14 @@
  *
  * This enumeration defines all possible tree placer algorithm in the game.
  */
-enum TreePlacer {
+enum TreePlacer : uint8_t {
 	TP_NONE,     ///< No tree placer algorithm
 	TP_ORIGINAL, ///< The original algorithm
 	TP_IMPROVED, ///< A 'improved' algorithm
 };
 
 /** Where to place trees while in-game? */
-enum ExtraTreePlacement {
+enum ExtraTreePlacement : uint8_t {
 	ETP_NO_SPREAD,           ///< Grow trees on tiles that have them but don't spread to new ones
 	ETP_SPREAD_RAINFOREST,   ///< Grow trees on tiles that have them, only spread to new ones in rainforests
 	ETP_SPREAD_ALL,          ///< Grow trees and spread them without restrictions
@@ -50,11 +52,11 @@ enum ExtraTreePlacement {
 };
 
 /** Determines when to consider building more trees. */
-byte _trees_tick_ctr;
+uint8_t _trees_tick_ctr;
 
-static const uint16 DEFAULT_TREE_STEPS = 1000;             ///< Default number of attempts for placing trees.
-static const uint16 DEFAULT_RAINFOREST_TREE_STEPS = 15000; ///< Default number of attempts for placing extra trees at rainforest in tropic.
-static const uint16 EDITOR_TREE_DIV = 5;                   ///< Game editor tree generation divisor factor.
+static const uint16_t DEFAULT_TREE_STEPS = 1000;             ///< Default number of attempts for placing trees.
+static const uint16_t DEFAULT_RAINFOREST_TREE_STEPS = 15000; ///< Default number of attempts for placing extra trees at rainforest in tropic.
+static const uint16_t EDITOR_TREE_DIV = 5;                   ///< Game editor tree generation divisor factor.
 
 /**
  * Tests if a tile can be converted to MP_TREES
@@ -89,7 +91,7 @@ static bool CanPlantTreesOnTile(TileIndex tile, bool allow_desert)
  * @param count the number of trees (minus 1)
  * @param growth the growth status
  */
-static void PlantTreesOnTile(TileIndex tile, TreeType treetype, uint count, uint growth)
+static void PlantTreesOnTile(TileIndex tile, TreeType treetype, uint count, TreeGrowthStage growth)
 {
 	assert(treetype != TREE_INVALID);
 	assert(CanPlantTreesOnTile(tile, true));
@@ -100,6 +102,7 @@ static void PlantTreesOnTile(TileIndex tile, TreeType treetype, uint count, uint
 	switch (GetTileType(tile)) {
 		case MP_WATER:
 			ground = TREE_GROUND_SHORE;
+			ClearNeighbourNonFloodingStates(tile);
 			break;
 
 		case MP_CLEAR:
@@ -132,21 +135,21 @@ static void PlantTreesOnTile(TileIndex tile, TreeType treetype, uint count, uint
 static TreeType GetRandomTreeType(TileIndex tile, uint seed)
 {
 	switch (_settings_game.game_creation.landscape) {
-		case LT_TEMPERATE:
-			return (TreeType)(seed * TREE_COUNT_TEMPERATE / 256 + TREE_TEMPERATE);
+		case LandscapeType::Temperate:
+			return static_cast<TreeType>(seed * TREE_COUNT_TEMPERATE / 256 + TREE_TEMPERATE);
 
-		case LT_ARCTIC:
-			return (TreeType)(seed * TREE_COUNT_SUB_ARCTIC / 256 + TREE_SUB_ARCTIC);
+		case LandscapeType::Arctic:
+			return static_cast<TreeType>(seed * TREE_COUNT_SUB_ARCTIC / 256 + TREE_SUB_ARCTIC);
 
-		case LT_TROPIC:
+		case LandscapeType::Tropic:
 			switch (GetTropicZone(tile)) {
-				case TROPICZONE_NORMAL:  return (TreeType)(seed * TREE_COUNT_SUB_TROPICAL / 256 + TREE_SUB_TROPICAL);
-				case TROPICZONE_DESERT:  return (TreeType)((seed > 12) ? TREE_INVALID : TREE_CACTUS);
-				default:                 return (TreeType)(seed * TREE_COUNT_RAINFOREST / 256 + TREE_RAINFOREST);
+				case TROPICZONE_NORMAL:  return static_cast<TreeType>(seed * TREE_COUNT_SUB_TROPICAL / 256 + TREE_SUB_TROPICAL);
+				case TROPICZONE_DESERT:  return static_cast<TreeType>((seed > 12) ? TREE_INVALID : TREE_CACTUS);
+				default:                 return static_cast<TreeType>(seed * TREE_COUNT_RAINFOREST / 256 + TREE_RAINFOREST);
 			}
 
 		default:
-			return (TreeType)(seed * TREE_COUNT_TOYLAND / 256 + TREE_TOYLAND);
+			return static_cast<TreeType>(seed * TREE_COUNT_TOYLAND / 256 + TREE_TOYLAND);
 	}
 }
 
@@ -159,12 +162,12 @@ static TreeType GetRandomTreeType(TileIndex tile, uint seed)
  * @param tile The tile to make a tree-tile from
  * @param r The randomness value from a Random() value
  */
-static void PlaceTree(TileIndex tile, uint32 r)
+static void PlaceTree(TileIndex tile, uint32_t r)
 {
 	TreeType tree = GetRandomTreeType(tile, GB(r, 24, 8));
 
 	if (tree != TREE_INVALID) {
-		PlantTreesOnTile(tile, tree, GB(r, 22, 2), std::min<byte>(GB(r, 16, 3), 6));
+		PlantTreesOnTile(tile, tree, GB(r, 22, 2), static_cast<TreeGrowthStage>(std::min<uint8_t>(GB(r, 16, 3), 6)));
 		MarkTileDirtyByTile(tile);
 
 		/* Rerandomize ground, if neither snow nor shore */
@@ -172,9 +175,6 @@ static void PlaceTree(TileIndex tile, uint32 r)
 		if (ground != TREE_GROUND_SNOW_DESERT && ground != TREE_GROUND_ROUGH_SNOW && ground != TREE_GROUND_SHORE) {
 			SetTreeGroundDensity(tile, (TreeGround)GB(r, 28, 1), 3);
 		}
-
-		/* Set the counter to a random start value */
-		SetTreeCounter(tile, (TreeGround)GB(r, 24, 4));
 	}
 }
 
@@ -190,7 +190,7 @@ static void PlaceTreeGroups(uint num_groups)
 		TileIndex center_tile = RandomTile();
 
 		for (uint i = 0; i < DEFAULT_TREE_STEPS; i++) {
-			uint32 r = Random();
+			uint32_t r = Random();
 			int x = GB(r, 0, 5) - 16;
 			int y = GB(r, 8, 5) - 16;
 			uint dist = abs(x) + abs(y);
@@ -218,7 +218,7 @@ static void PlaceTreeGroups(uint num_groups)
 static void PlaceTreeAtSameHeight(TileIndex tile, int height)
 {
 	for (uint i = 0; i < DEFAULT_TREE_STEPS; i++) {
-		uint32 r = Random();
+		uint32_t r = Random();
 		int x = GB(r, 0, 5) - 16;
 		int y = GB(r, 8, 5) - 16;
 		TileIndex cur_tile = TileAddWrap(tile, x, y);
@@ -247,11 +247,12 @@ static void PlaceTreeAtSameHeight(TileIndex tile, int height)
 void PlaceTreesRandomly()
 {
 	int i, j, ht;
+	uint8_t max_height = _settings_game.construction.map_height_limit;
 
-	i = ScaleByMapSize(DEFAULT_TREE_STEPS);
+	i = Map::ScaleBySize(DEFAULT_TREE_STEPS);
 	if (_game_mode == GM_EDITOR) i /= EDITOR_TREE_DIV;
 	do {
-		uint32 r = Random();
+		uint32_t r = Random();
 		TileIndex tile = RandomTileSeed(r);
 
 		IncreaseGeneratingWorldProgress(GWP_TREE);
@@ -267,7 +268,9 @@ void PlaceTreesRandomly()
 			/* The higher we get, the more trees we plant */
 			j = GetTileZ(tile) * 2;
 			/* Above snowline more trees! */
-			if (_settings_game.game_creation.landscape == LT_ARCTIC && ht > GetSnowLine()) j *= 3;
+			if (_settings_game.game_creation.landscape == LandscapeType::Arctic && ht > GetSnowLine()) j *= 3;
+			/* Scale generation by maximum map height. */
+			if (max_height > MAP_HEIGHT_LIMIT_ORIGINAL) j = j * MAP_HEIGHT_LIMIT_ORIGINAL / max_height;
 			while (j--) {
 				PlaceTreeAtSameHeight(tile, ht);
 			}
@@ -275,12 +278,12 @@ void PlaceTreesRandomly()
 	} while (--i);
 
 	/* place extra trees at rainforest area */
-	if (_settings_game.game_creation.landscape == LT_TROPIC) {
-		i = ScaleByMapSize(DEFAULT_RAINFOREST_TREE_STEPS);
+	if (_settings_game.game_creation.landscape == LandscapeType::Tropic) {
+		i = Map::ScaleBySize(DEFAULT_RAINFOREST_TREE_STEPS);
 		if (_game_mode == GM_EDITOR) i /= EDITOR_TREE_DIV;
 
 		do {
-			uint32 r = Random();
+			uint32_t r = Random();
 			TileIndex tile = RandomTileSeed(r);
 
 			IncreaseGeneratingWorldProgress(GWP_TREE);
@@ -301,36 +304,44 @@ void PlaceTreesRandomly()
  * @param treetype  Type of trees to place. Must be a valid tree type for the climate.
  * @param radius    Maximum distance (on each axis) from tile to place trees.
  * @param count     Maximum number of trees to place.
+ * @param set_zone  Whether to create a rainforest zone when placing rainforest trees.
  * @return Number of trees actually placed.
  */
-uint PlaceTreeGroupAroundTile(TileIndex tile, TreeType treetype, uint radius, uint count)
+uint PlaceTreeGroupAroundTile(TileIndex tile, TreeType treetype, uint radius, uint count, bool set_zone)
 {
+	assert(_game_mode == GM_EDITOR); // Due to InteractiveRandom being used in this function
 	assert(treetype < TREE_TOYLAND + TREE_COUNT_TOYLAND);
 	const bool allow_desert = treetype == TREE_CACTUS;
 	uint planted = 0;
 
 	for (; count > 0; count--) {
 		/* Simple quasi-normal distribution with range [-radius; radius) */
-		auto mkcoord = [&]() -> int32 {
-			const uint32 rand = InteractiveRandom();
-			const int32 dist = GB<int32>(rand, 0, 8) + GB<int32>(rand, 8, 8) + GB<int32>(rand, 16, 8) + GB<int32>(rand, 24, 8);
-			const int32 scu = dist * radius / 512;
+		auto mkcoord = [&]() -> int32_t {
+			const uint32_t rand = InteractiveRandom();
+			const int32_t dist = GB<int32_t>(rand, 0, 8) + GB<int32_t>(rand, 8, 8) + GB<int32_t>(rand, 16, 8) + GB<int32_t>(rand, 24, 8);
+			const int32_t scu = dist * radius / 512;
 			return scu - radius;
 		};
-		const int32 xofs = mkcoord();
-		const int32 yofs = mkcoord();
+		const int32_t xofs = mkcoord();
+		const int32_t yofs = mkcoord();
 		const TileIndex tile_to_plant = TileAddWrap(tile, xofs, yofs);
 		if (tile_to_plant != INVALID_TILE) {
 			if (IsTileType(tile_to_plant, MP_TREES) && GetTreeCount(tile_to_plant) < 4) {
 				AddTreeCount(tile_to_plant, 1);
-				SetTreeGrowth(tile_to_plant, 0);
+				SetTreeGrowth(tile_to_plant, TreeGrowthStage::Growing1);
 				MarkTileDirtyByTile(tile_to_plant, 0);
 				planted++;
 			} else if (CanPlantTreesOnTile(tile_to_plant, allow_desert)) {
-				PlantTreesOnTile(tile_to_plant, treetype, 0, 3);
+				PlantTreesOnTile(tile_to_plant, treetype, 0, TreeGrowthStage::Grown);
 				MarkTileDirtyByTile(tile_to_plant, 0);
 				planted++;
 			}
+		}
+	}
+
+	if (set_zone && IsInsideMM(treetype, TREE_RAINFOREST, TREE_CACTUS)) {
+		for (TileIndex t : TileArea(tile).Expand(radius)) {
+			if (GetTileType(t) != MP_VOID && DistanceSquare(tile, t) < radius * radius) SetTropicZone(t, TROPICZONE_RAINFOREST);
 		}
 	}
 
@@ -350,15 +361,15 @@ void GenerateTrees()
 	if (_settings_game.game_creation.tree_placer == TP_NONE) return;
 
 	switch (_settings_game.game_creation.tree_placer) {
-		case TP_ORIGINAL: i = _settings_game.game_creation.landscape == LT_ARCTIC ? 15 : 6; break;
-		case TP_IMPROVED: i = _settings_game.game_creation.landscape == LT_ARCTIC ?  4 : 2; break;
+		case TP_ORIGINAL: i = _settings_game.game_creation.landscape == LandscapeType::Arctic ? 15 : 6; break;
+		case TP_IMPROVED: i = _settings_game.game_creation.landscape == LandscapeType::Arctic ?  4 : 2; break;
 		default: NOT_REACHED();
 	}
 
-	total = ScaleByMapSize(DEFAULT_TREE_STEPS);
-	if (_settings_game.game_creation.landscape == LT_TROPIC) total += ScaleByMapSize(DEFAULT_RAINFOREST_TREE_STEPS);
+	total = Map::ScaleBySize(DEFAULT_TREE_STEPS);
+	if (_settings_game.game_creation.landscape == LandscapeType::Tropic) total += Map::ScaleBySize(DEFAULT_RAINFOREST_TREE_STEPS);
 	total *= i;
-	uint num_groups = (_settings_game.game_creation.landscape != LT_TOYLAND) ? ScaleByMapSize(GB(Random(), 0, 5) + 25) : 0;
+	uint num_groups = (_settings_game.game_creation.landscape != LandscapeType::Toyland) ? Map::ScaleBySize(GB(Random(), 0, 5) + 25) : 0;
 	total += num_groups * DEFAULT_TREE_STEPS;
 	SetGeneratingWorldProgress(GWP_TREE, total);
 
@@ -371,28 +382,28 @@ void GenerateTrees()
 
 /**
  * Plant a tree.
- * @param tile end tile of area-drag
  * @param flags type of operation
- * @param p1 tree type, TREE_INVALID means random.
- * @param p2 start tile of area-drag of tree plantation
- * @param text unused
+ * @param tile end tile of area-drag
+ * @param start_tile start tile of area-drag of tree plantation
+ * @param tree_to_plant tree type, TREE_INVALID means random.
+ * @param diagonal Whether to use the Orthogonal (false) or Diagonal (true) iterator.
  * @return the cost of this operation or an error
  */
-CommandCost CmdPlantTree(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 p2, const std::string &text)
+CommandCost CmdPlantTree(DoCommandFlag flags, TileIndex tile, TileIndex start_tile, uint8_t tree_to_plant, bool diagonal)
 {
 	StringID msg = INVALID_STRING_ID;
 	CommandCost cost(EXPENSES_OTHER);
-	const byte tree_to_plant = GB(p1, 0, 8); // We cannot use Extract as min and max are climate specific.
 
-	if (p2 >= MapSize()) return CMD_ERROR;
+	if (start_tile >= Map::Size()) return CMD_ERROR;
 	/* Check the tree type within the current climate */
-	if (tree_to_plant != TREE_INVALID && !IsInsideBS(tree_to_plant, _tree_base_by_landscape[_settings_game.game_creation.landscape], _tree_count_by_landscape[_settings_game.game_creation.landscape])) return CMD_ERROR;
+	if (tree_to_plant != TREE_INVALID && !IsInsideBS(tree_to_plant, _tree_base_by_landscape[to_underlying(_settings_game.game_creation.landscape)], _tree_count_by_landscape[to_underlying(_settings_game.game_creation.landscape)])) return CMD_ERROR;
 
 	Company *c = (_game_mode != GM_EDITOR) ? Company::GetIfValid(_current_company) : nullptr;
 	int limit = (c == nullptr ? INT32_MAX : GB(c->tree_limit, 16, 16));
 
-	TileArea ta(tile, p2);
-	for (TileIndex current_tile : ta) {
+	std::unique_ptr<TileIterator> iter = TileIterator::Create(tile, start_tile, diagonal);
+	for (; *iter != INVALID_TILE; ++(*iter)) {
+		TileIndex current_tile = *iter;
 		switch (GetTileType(current_tile)) {
 			case MP_TREES:
 				/* no more space for trees? */
@@ -421,7 +432,7 @@ CommandCost CmdPlantTree(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
 					msg = STR_ERROR_CAN_T_BUILD_ON_WATER;
 					continue;
 				}
-				FALLTHROUGH;
+				[[fallthrough]];
 
 			case MP_CLEAR: {
 				if (IsBridgeAbove(current_tile)) {
@@ -431,12 +442,12 @@ CommandCost CmdPlantTree(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
 
 				TreeType treetype = (TreeType)tree_to_plant;
 				/* Be a bit picky about which trees go where. */
-				if (_settings_game.game_creation.landscape == LT_TROPIC && treetype != TREE_INVALID && (
+				if (_settings_game.game_creation.landscape == LandscapeType::Tropic && treetype != TREE_INVALID && (
 						/* No cacti outside the desert */
 						(treetype == TREE_CACTUS && GetTropicZone(current_tile) != TROPICZONE_DESERT) ||
-						/* No rain forest trees outside the rain forest, except in the editor mode where it makes those tiles rain forest tile */
+						/* No rainforest trees outside the rainforest, except in the editor mode where it makes those tiles rainforest tile */
 						(IsInsideMM(treetype, TREE_RAINFOREST, TREE_CACTUS) && GetTropicZone(current_tile) != TROPICZONE_RAINFOREST && _game_mode != GM_EDITOR) ||
-						/* And no subtropical trees in the desert/rain forest */
+						/* And no subtropical trees in the desert/rainforest */
 						(IsInsideMM(treetype, TREE_SUB_TROPICAL, TREE_TOYLAND) && GetTropicZone(current_tile) != TROPICZONE_NORMAL))) {
 					msg = STR_ERROR_TREE_WRONG_TERRAIN_FOR_TREE_TYPE;
 					continue;
@@ -453,7 +464,7 @@ CommandCost CmdPlantTree(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
 					switch (GetRawClearGround(current_tile)) {
 						case CLEAR_FIELDS:
 						case CLEAR_ROCKS: {
-							CommandCost ret = DoCommand(current_tile, 0, 0, flags, CMD_LANDSCAPE_CLEAR);
+							CommandCost ret = Command<CMD_LANDSCAPE_CLEAR>::Do(flags, current_tile);
 							if (ret.Failed()) return ret;
 							cost.AddCost(ret);
 							break;
@@ -475,7 +486,7 @@ CommandCost CmdPlantTree(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
 					}
 
 					/* Plant full grown trees in scenario editor */
-					PlantTreesOnTile(current_tile, treetype, 0, _game_mode == GM_EDITOR ? 3 : 0);
+					PlantTreesOnTile(current_tile, treetype, 0, _game_mode == GM_EDITOR ? TreeGrowthStage::Grown : TreeGrowthStage::Growing1);
 					MarkTileDirtyByTile(current_tile);
 					if (c != nullptr) c->tree_limit -= 1 << 16;
 
@@ -498,14 +509,14 @@ CommandCost CmdPlantTree(TileIndex tile, DoCommandFlag flags, uint32 p1, uint32 
 	}
 
 	if (cost.GetCost() == 0) {
-		return_cmd_error(msg);
+		return CommandCost(msg);
 	} else {
 		return cost;
 	}
 }
 
 struct TreeListEnt : PalSpriteID {
-	byte x, y;
+	uint8_t x, y;
 };
 
 static void DrawTile_Trees(TileInfo *ti)
@@ -520,7 +531,7 @@ static void DrawTile_Trees(TileInfo *ti)
 	/* Do not draw trees when the invisible trees setting is set */
 	if (IsInvisibilitySet(TO_TREES)) return;
 
-	uint tmp = CountBits(ti->tile + ti->x + ti->y);
+	uint tmp = CountBits(ti->tile.base() + ti->x + ti->y);
 	uint index = GB(tmp, 0, 2) + (GetTreeType(ti->tile) << 2);
 
 	/* different tree styles above one of the grounds */
@@ -544,7 +555,7 @@ static void DrawTile_Trees(TileInfo *ti)
 	uint trees = GetTreeCount(ti->tile);
 
 	for (uint i = 0; i < trees; i++) {
-		SpriteID sprite = s[0].sprite + (i == trees - 1 ? GetTreeGrowth(ti->tile) : 3);
+		SpriteID sprite = s[0].sprite + (i == trees - 1 ? static_cast<uint>(GetTreeGrowth(ti->tile)) : 3);
 		PaletteID pal = s[0].pal;
 
 		te[i].sprite = sprite;
@@ -579,15 +590,14 @@ static void DrawTile_Trees(TileInfo *ti)
 }
 
 
-static int GetSlopePixelZ_Trees(TileIndex tile, uint x, uint y)
+static int GetSlopePixelZ_Trees(TileIndex tile, uint x, uint y, bool)
 {
-	int z;
-	Slope tileh = GetTilePixelSlope(tile, &z);
+	auto [tileh, z] = GetTilePixelSlope(tile);
 
 	return z + GetPartialPixelZ(x & 0xF, y & 0xF, tileh);
 }
 
-static Foundation GetFoundation_Trees(TileIndex tile, Slope tileh)
+static Foundation GetFoundation_Trees(TileIndex, Slope)
 {
 	return FOUNDATION_NONE;
 }
@@ -639,7 +649,7 @@ static void TileLoopTreesDesert(TileIndex tile)
 				SND_44_RAINFOREST_3,
 				SND_48_RAINFOREST_4
 			};
-			uint32 r = Random();
+			uint32_t r = Random();
 
 			if (Chance16I(1, 200, r) && _settings_client.sound.ambient) SndPlayTileFx(forest_sounds[GB(r, 16, 2)], tile);
 			break;
@@ -669,7 +679,7 @@ static void TileLoopTreesAlps(TileIndex tile)
 			SetTreeGroundDensity(tile, GetTreeGround(tile), density);
 		} else {
 			if (GetTreeDensity(tile) == 3) {
-				uint32 r = Random();
+				uint32_t r = Random();
 				if (Chance16I(1, 200, r) && _settings_client.sound.ambient) {
 					SndPlayTileFx((r & 0x80000000) ? SND_39_ARCTIC_SNOW_2 : SND_34_ARCTIC_SNOW_1, tile);
 				}
@@ -682,7 +692,7 @@ static void TileLoopTreesAlps(TileIndex tile)
 
 static bool CanPlantExtraTrees(TileIndex tile)
 {
-	return ((_settings_game.game_creation.landscape == LT_TROPIC && GetTropicZone(tile) == TROPICZONE_RAINFOREST) ?
+	return ((_settings_game.game_creation.landscape == LandscapeType::Tropic && GetTropicZone(tile) == TROPICZONE_RAINFOREST) ?
 		(_settings_game.construction.extra_tree_placement == ETP_SPREAD_ALL || _settings_game.construction.extra_tree_placement == ETP_SPREAD_RAINFOREST) :
 		_settings_game.construction.extra_tree_placement == ETP_SPREAD_ALL);
 }
@@ -693,17 +703,22 @@ static void TileLoop_Trees(TileIndex tile)
 		TileLoop_Water(tile);
 	} else {
 		switch (_settings_game.game_creation.landscape) {
-			case LT_TROPIC: TileLoopTreesDesert(tile); break;
-			case LT_ARCTIC: TileLoopTreesAlps(tile);   break;
+			case LandscapeType::Tropic: TileLoopTreesDesert(tile); break;
+			case LandscapeType::Arctic: TileLoopTreesAlps(tile);   break;
+			default: break;
 		}
 	}
 
 	AmbientSoundEffect(tile);
 
-	uint treeCounter = GetTreeCounter(tile);
+	/* TimerGameTick::counter is incremented by 256 between each call, so ignore lower 8 bits.
+	 * Also, we use a simple hash to spread the updates evenly over the map.
+	 * 11 and 9 are just some co-prime numbers for better spread.
+	 */
+	uint32_t cycle = 11 * TileX(tile) + 9 * TileY(tile) + (TimerGameTick::counter >> 8);
 
 	/* Handle growth of grass (under trees/on MP_TREES tiles) at every 8th processings, like it's done for grass on MP_CLEAR tiles. */
-	if ((treeCounter & 7) == 7 && GetTreeGround(tile) == TREE_GROUND_GRASS) {
+	if ((cycle & 7) == 7 && GetTreeGround(tile) == TREE_GROUND_GRASS) {
 		uint density = GetTreeDensity(tile);
 		if (density < 3) {
 			SetTreeGroundDensity(tile, TREE_GROUND_GRASS, density + 1);
@@ -713,15 +728,12 @@ static void TileLoop_Trees(TileIndex tile)
 
 	if (_settings_game.construction.extra_tree_placement == ETP_NO_GROWTH_NO_SPREAD) return;
 
-	if (GetTreeCounter(tile) < 15) {
-		AddTreeCounter(tile, 1);
-		return;
-	}
-	SetTreeCounter(tile, 0);
+	static const uint32_t TREE_UPDATE_FREQUENCY = 16;  // How many tile updates happen for one tree update
+	if (cycle % TREE_UPDATE_FREQUENCY != TREE_UPDATE_FREQUENCY - 1) return;
 
 	switch (GetTreeGrowth(tile)) {
-		case 3: // regular sized tree
-			if (_settings_game.game_creation.landscape == LT_TROPIC &&
+		case TreeGrowthStage::Grown: // regular sized tree
+			if (_settings_game.game_creation.landscape == LandscapeType::Tropic &&
 					GetTreeType(tile) != TREE_CACTUS &&
 					GetTropicZone(tile) == TROPICZONE_DESERT) {
 				AddTreeGrowth(tile, 1);
@@ -734,17 +746,17 @@ static void TileLoop_Trees(TileIndex tile)
 					case 1: // add a tree
 						if (GetTreeCount(tile) < 4 && CanPlantExtraTrees(tile)) {
 							AddTreeCount(tile, 1);
-							SetTreeGrowth(tile, 0);
+							SetTreeGrowth(tile, TreeGrowthStage::Growing1);
 							break;
 						}
-						FALLTHROUGH;
+						[[fallthrough]];
 
 					case 2: { // add a neighbouring tree
 						if (!CanPlantExtraTrees(tile)) break;
 
 						TreeType treetype = GetTreeType(tile);
 
-						tile += TileOffsByDir((Direction)(Random() & 7));
+						tile += TileOffsByDir(static_cast<Direction>(Random() % DIR_END));
 
 						/* Cacti don't spread */
 						if (!CanPlantTreesOnTile(tile, false)) return;
@@ -752,7 +764,7 @@ static void TileLoop_Trees(TileIndex tile)
 						/* Don't plant trees, if ground was freshly cleared */
 						if (IsTileType(tile, MP_CLEAR) && GetClearGround(tile) == CLEAR_GRASS && GetClearDensity(tile) != 3) return;
 
-						PlantTreesOnTile(tile, treetype, 0, 0);
+						PlantTreesOnTile(tile, treetype, 0, TreeGrowthStage::Growing1);
 
 						break;
 					}
@@ -763,14 +775,14 @@ static void TileLoop_Trees(TileIndex tile)
 			}
 			break;
 
-		case 6: // final stage of tree destruction
+		case TreeGrowthStage::Dead: // final stage of tree destruction
 			if (!CanPlantExtraTrees(tile)) {
 				/* if trees can't spread just plant a new one to prevent deforestation */
-				SetTreeGrowth(tile, 0);
+				SetTreeGrowth(tile, TreeGrowthStage::Growing1);
 			} else if (GetTreeCount(tile) > 1) {
 				/* more than one tree, delete it */
 				AddTreeCount(tile, -1);
-				SetTreeGrowth(tile, 3);
+				SetTreeGrowth(tile, TreeGrowthStage::Grown);
 			} else {
 				/* just one tree, change type into MP_CLEAR */
 				switch (GetTreeGround(tile)) {
@@ -784,7 +796,7 @@ static void TileLoop_Trees(TileIndex tile)
 						break;
 					}
 					default: // snow or desert
-						if (_settings_game.game_creation.landscape == LT_TROPIC) {
+						if (_settings_game.game_creation.landscape == LandscapeType::Tropic) {
 							MakeClear(tile, CLEAR_DESERT, GetTreeDensity(tile));
 						} else {
 							uint density = GetTreeDensity(tile);
@@ -813,12 +825,30 @@ static void TileLoop_Trees(TileIndex tile)
 bool DecrementTreeCounter()
 {
 	/* Ensure _trees_tick_ctr can be decremented past zero only once for the largest map size. */
-	static_assert(2 * (MAX_MAP_SIZE_BITS - MIN_MAP_SIZE_BITS) - 4 <= std::numeric_limits<byte>::digits);
+	static_assert(2 * (MAX_MAP_SIZE_BITS - MIN_MAP_SIZE_BITS) - 4 <= std::numeric_limits<uint8_t>::digits);
 
 	/* byte underflow */
-	byte old_trees_tick_ctr = _trees_tick_ctr;
-	_trees_tick_ctr -= ScaleByMapSize(1);
+	uint8_t old_trees_tick_ctr = _trees_tick_ctr;
+	_trees_tick_ctr -= Map::ScaleBySize(1);
 	return old_trees_tick_ctr <= _trees_tick_ctr;
+}
+
+/**
+ * Place a random tree on a random tile.
+ * @param rainforest If set the random tile must be in a rainforest zone.
+ */
+static void PlantRandomTree(bool rainforest)
+{
+	uint32_t r = Random();
+	TileIndex tile = RandomTileSeed(r);
+
+	if (rainforest && GetTropicZone(tile) != TROPICZONE_RAINFOREST) return;
+	if (!CanPlantTreesOnTile(tile, false)) return;
+
+	TreeType tree = GetRandomTreeType(tile, GB(r, 24, 8));
+	if (tree == TREE_INVALID) return;
+
+	PlantTreesOnTile(tile, tree, 0, TreeGrowthStage::Growing1);
 }
 
 void OnTick_Trees()
@@ -826,43 +856,31 @@ void OnTick_Trees()
 	/* Don't spread trees if that's not allowed */
 	if (_settings_game.construction.extra_tree_placement == ETP_NO_SPREAD || _settings_game.construction.extra_tree_placement == ETP_NO_GROWTH_NO_SPREAD) return;
 
-	uint32 r;
-	TileIndex tile;
-	TreeType tree;
-
 	/* Skip some tree ticks for map sizes below 256 * 256. 64 * 64 is 16 times smaller, so
 	 * this is the maximum number of ticks that are skipped. Number of ticks to skip is
 	 * inversely proportional to map size, so that is handled to create a mask. */
-	int skip = ScaleByMapSize(16);
-	if (skip < 16 && (_tick_counter & (16 / skip - 1)) != 0) return;
+	int skip = Map::ScaleBySize(16);
+	if (skip < 16 && (TimerGameTick::counter & (16 / skip - 1)) != 0) return;
 
 	/* place a tree at a random rainforest spot */
-	if (_settings_game.game_creation.landscape == LT_TROPIC) {
-		for (uint c = ScaleByMapSize(1); c > 0; c--) {
-			if ((r = Random(), tile = RandomTileSeed(r), GetTropicZone(tile) == TROPICZONE_RAINFOREST) &&
-				CanPlantTreesOnTile(tile, false) &&
-				(tree = GetRandomTreeType(tile, GB(r, 24, 8))) != TREE_INVALID) {
-				PlantTreesOnTile(tile, tree, 0, 0);
-			}
+	if (_settings_game.game_creation.landscape == LandscapeType::Tropic) {
+		for (uint c = Map::ScaleBySize(1); c > 0; c--) {
+			PlantRandomTree(true);
 		}
 	}
 
 	if (!DecrementTreeCounter() || _settings_game.construction.extra_tree_placement == ETP_SPREAD_RAINFOREST) return;
 
 	/* place a tree at a random spot */
-	r = Random();
-	tile = RandomTileSeed(r);
-	if (CanPlantTreesOnTile(tile, false) && (tree = GetRandomTreeType(tile, GB(r, 24, 8))) != TREE_INVALID) {
-		PlantTreesOnTile(tile, tree, 0, 0);
-	}
+	PlantRandomTree(false);
 }
 
-static TrackStatus GetTileTrackStatus_Trees(TileIndex tile, TransportType mode, uint sub_mode, DiagDirection side)
+static TrackStatus GetTileTrackStatus_Trees(TileIndex, TransportType, uint, DiagDirection)
 {
 	return 0;
 }
 
-static void ChangeTileOwner_Trees(TileIndex tile, Owner old_owner, Owner new_owner)
+static void ChangeTileOwner_Trees(TileIndex, Owner, Owner)
 {
 	/* not used */
 }
@@ -872,9 +890,9 @@ void InitializeTrees()
 	_trees_tick_ctr = 0;
 }
 
-static CommandCost TerraformTile_Trees(TileIndex tile, DoCommandFlag flags, int z_new, Slope tileh_new)
+static CommandCost TerraformTile_Trees(TileIndex tile, DoCommandFlag flags, int, Slope)
 {
-	return DoCommand(tile, 0, 0, flags, CMD_LANDSCAPE_CLEAR);
+	return Command<CMD_LANDSCAPE_CLEAR>::Do(flags, tile);
 }
 
 

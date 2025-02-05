@@ -10,22 +10,29 @@
 #ifndef STATION_GUI_H
 #define STATION_GUI_H
 
+#include "core/geometry_type.hpp"
 #include "command_type.h"
 #include "tilearea_type.h"
 #include "window_type.h"
+#include "station_type.h"
 
 
 /** Types of cargo to display for station coverage. */
-enum StationCoverageType {
+enum StationCoverageType : uint8_t {
 	SCT_PASSENGERS_ONLY,     ///< Draw only passenger class cargoes.
 	SCT_NON_PASSENGERS_ONLY, ///< Draw all non-passenger class cargoes.
 	SCT_ALL,                 ///< Draw all cargoes.
 };
 
-int DrawStationCoverageAreaText(int left, int right, int top, StationCoverageType sct, int rad, bool supplies);
+int DrawStationCoverageAreaText(const Rect &r, StationCoverageType sct, int rad, bool supplies);
 void CheckRedrawStationCoverage(const Window *w);
+void CheckRedrawRailWaypointCoverage(const Window *w);
+void CheckRedrawRoadWaypointCoverage(const Window *w);
 
-void ShowSelectStationIfNeeded(const CommandContainer &cmd, TileArea ta);
-void ShowSelectWaypointIfNeeded(const CommandContainer &cmd, TileArea ta);
+using StationPickerCmdProc = std::function<bool(bool test, StationID to_join)>;
+
+void ShowSelectStationIfNeeded(TileArea ta, StationPickerCmdProc proc);
+void ShowSelectRailWaypointIfNeeded(TileArea ta, StationPickerCmdProc proc);
+void ShowSelectRoadWaypointIfNeeded(TileArea ta, StationPickerCmdProc proc);
 
 #endif /* STATION_GUI_H */

@@ -16,7 +16,7 @@
 /**
  * Global Railtype definition
  */
-static const RailtypeInfo _original_railtypes[] = {
+static const RailTypeInfo _original_railtypes[] = {
 	/** Railway */
 	{ // Main Sprites
 		{ SPR_RAIL_TRACK_Y, SPR_RAIL_TRACK_N_S, SPR_RAIL_TRACK_BASE, SPR_RAIL_SINGLE_X, SPR_RAIL_SINGLE_Y,
@@ -75,7 +75,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0,
 
 		/* flags */
-		RTFB_NONE,
+		{},
 
 		/* cost multiplier */
 		8,
@@ -90,7 +90,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0,
 
 		/* rail type label */
-		'RAIL',
+		RAILTYPE_LABEL_RAIL,
 
 		/* alternate labels */
 		RailTypeLabelList(),
@@ -99,7 +99,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0x0A,
 
 		/* introduction date */
-		INVALID_DATE,
+		CalendarTime::INVALID_DATE,
 
 		/* railtypes required for this to be introduced */
 		RAILTYPES_NONE,
@@ -176,7 +176,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0,
 
 		/* flags */
-		RTFB_CATENARY,
+		{RailTypeFlag::Catenary},
 
 		/* cost multiplier */
 		12,
@@ -191,7 +191,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0,
 
 		/* rail type label */
-		'ELRL',
+		RAILTYPE_LABEL_ELECTRIC,
 
 		/* alternate labels */
 		RailTypeLabelList(),
@@ -200,7 +200,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0x0A,
 
 		/* introduction date */
-		INVALID_DATE,
+		CalendarTime::INVALID_DATE,
 
 		/* railtypes required for this to be introduced */
 		RAILTYPES_NONE,
@@ -273,7 +273,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		1,
 
 		/* flags */
-		RTFB_NONE,
+		{},
 
 		/* cost multiplier */
 		16,
@@ -288,7 +288,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0,
 
 		/* rail type label */
-		'MONO',
+		RAILTYPE_LABEL_MONO,
 
 		/* alternate labels */
 		RailTypeLabelList(),
@@ -297,7 +297,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0x0A,
 
 		/* introduction date */
-		INVALID_DATE,
+		CalendarTime::INVALID_DATE,
 
 		/* railtypes required for this to be introduced */
 		RAILTYPES_NONE,
@@ -370,7 +370,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		2,
 
 		/* flags */
-		RTFB_NONE,
+		{},
 
 		/* cost multiplier */
 		24,
@@ -385,7 +385,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0,
 
 		/* rail type label */
-		'MGLV',
+		RAILTYPE_LABEL_MAGLEV,
 
 		/* alternate labels */
 		RailTypeLabelList(),
@@ -394,7 +394,7 @@ static const RailtypeInfo _original_railtypes[] = {
 		0x0A,
 
 		/* introduction date */
-		INVALID_DATE,
+		CalendarTime::INVALID_DATE,
 
 		/* railtypes required for this to be introduced */
 		RAILTYPES_NONE,

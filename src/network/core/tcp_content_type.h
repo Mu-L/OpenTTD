@@ -12,8 +12,10 @@
 #ifndef NETWORK_CORE_TCP_CONTENT_TYPE_H
 #define NETWORK_CORE_TCP_CONTENT_TYPE_H
 
+#include "../../3rdparty/md5/md5.h"
+
 /** The values in the enum are important; they are used as database 'keys' */
-enum ContentType {
+enum ContentType : uint8_t {
 	CONTENT_TYPE_BEGIN         = 1, ///< Helper to mark the begin of the types
 	CONTENT_TYPE_BASE_GRAPHICS = 1, ///< The content consists of base graphics
 	CONTENT_TYPE_NEWGRF        = 2, ///< The content consists of a NewGRF
@@ -30,7 +32,7 @@ enum ContentType {
 };
 
 /** Enum with all types of TCP content packets. The order MUST not be changed **/
-enum PacketContentType {
+enum PacketContentType : uint8_t {
 	PACKET_CONTENT_CLIENT_INFO_LIST,      ///< Queries the content server for a list of info of a given content type
 	PACKET_CONTENT_CLIENT_INFO_ID,        ///< Queries the content server for information about a list of internal IDs
 	PACKET_CONTENT_CLIENT_INFO_EXTID,     ///< Queries the content server for information about a list of external IDs
@@ -42,14 +44,14 @@ enum PacketContentType {
 };
 
 /** Unique identifier for the content. */
-enum ContentID {
-	INVALID_CONTENT_ID = UINT32_MAX, ///< Sentinel for invalid content.
-};
+using ContentID = uint32_t;
+
+static constexpr ContentID INVALID_CONTENT_ID = UINT32_MAX; ///< Sentinel for invalid content.
 
 /** Container for all important information about a piece of content. */
 struct ContentInfo {
 	/** The state the content can be in. */
-	enum State {
+	enum State : uint8_t {
 		UNSELECTED,     ///< The content has not been selected
 		SELECTED,       ///< The content has been manually selected
 		AUTOSELECTED,   ///< The content has been selected as dependency
@@ -60,14 +62,14 @@ struct ContentInfo {
 
 	ContentType type = INVALID_CONTENT_TYPE; ///< Type of content
 	ContentID id = INVALID_CONTENT_ID;       ///< Unique (server side) ID for the content
-	uint32 filesize = 0;                     ///< Size of the file
+	uint32_t filesize = 0;                     ///< Size of the file
 	std::string filename;                    ///< Filename (for the .tar.gz; only valid on download)
 	std::string name;                        ///< Name of the content
 	std::string version;                     ///< Version of the content
 	std::string url;                         ///< URL related to the content
 	std::string description;                 ///< Description of the content
-	uint32 unique_id = 0;                    ///< Unique ID; either GRF ID or shortname
-	byte md5sum[16] = {0};                   ///< The MD5 checksum
+	uint32_t unique_id = 0;                    ///< Unique ID; either GRF ID or shortname
+	MD5Hash md5sum;                          ///< The MD5 checksum
 	std::vector<ContentID> dependencies;     ///< The dependencies (unique server side ids)
 	StringList tags;                         ///< Tags associated with the content
 	State state = State::UNSELECTED;         ///< Whether the content info is selected (for download)
@@ -75,7 +77,7 @@ struct ContentInfo {
 
 	bool IsSelected() const;
 	bool IsValid() const;
-	const char *GetTextfile(TextfileType type) const;
+	std::optional<std::string> GetTextfile(TextfileType type) const;
 };
 
 #endif /* NETWORK_CORE_TCP_CONTENT_TYPE_H */

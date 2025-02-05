@@ -220,6 +220,7 @@ function Regression::Airport()
 		print("  GetAirportWidth(" + i + "):               " + AIAirport.GetAirportWidth(i));
 		print("  GetAirportHeight(" + i + "):              " + AIAirport.GetAirportHeight(i));
 		print("  GetAirportCoverageRadius(" + i + "):      " + AIAirport.GetAirportCoverageRadius(i));
+		print("  GetAirportNumHelipads(" + i + "):         " + AIAirport.GetAirportNumHelipads(i));
 	}
 
 	print("  GetBankBalance():     " + AICompany.GetBankBalance(AICompany.COMPANY_SELF));
@@ -264,15 +265,15 @@ function Regression::Bridge()
 	print("  Valid Bridges:        " + j);
 
 	print("  IsBridgeTile():       " + AIBridge.IsBridgeTile(33160));
-	print("  GetBridgeID():        " + AIBridge.GetBridgeID(33160));
+	print("  GetBridgeType():      " + AIBridge.GetBridgeType(33160));
 	print("  RemoveBridge():       " + AIBridge.RemoveBridge(33155));
 	print("  GetLastErrorString(): " + AIError.GetLastErrorString());
 	print("  GetOtherBridgeEnd():  " + AIBridge.GetOtherBridgeEnd(33160));
 	print("  BuildBridge():        " + AIBridge.BuildBridge(AIVehicle.VT_ROAD, 5, 33160, 33155));
 	print("  IsBridgeTile():       " + AIBridge.IsBridgeTile(33160));
-	print("  GetBridgeID():        " + AIBridge.GetBridgeID(33160));
+	print("  GetBridgeType():      " + AIBridge.GetBridgeType(33160));
 	print("  IsBridgeTile():       " + AIBridge.IsBridgeTile(33155));
-	print("  GetBridgeID():        " + AIBridge.GetBridgeID(33155));
+	print("  GetBridgeType():      " + AIBridge.GetBridgeType(33155));
 	print("  GetOtherBridgeEnd():  " + AIBridge.GetOtherBridgeEnd(33160));
 	print("  BuildBridge():        " + AIBridge.BuildBridge(AIVehicle.VT_ROAD, 5, 33160, 33155));
 	print("  GetLastErrorString(): " + AIError.GetLastErrorString());
@@ -341,6 +342,7 @@ function Regression::Cargo()
 		print("    GetCargoIncome(10, 10):  " + AICargo.GetCargoIncome(i, 10, 10));
 		print("    GetCargoIncome(100, 10): " + AICargo.GetCargoIncome(i, 100, 10));
 		print("    GetCargoIncome(10, 100): " + AICargo.GetCargoIncome(i, 10, 100));
+		print("    GetWeight(100):          " + AICargo.GetWeight(i, 100));
 		print("    GetRoadVehicleTypeForCargo(): " + AIRoad.GetRoadVehicleTypeForCargo(i));
 	}
 }
@@ -547,6 +549,8 @@ function Regression::Prices()
 	print("  BT_DOCK:  " + AIMarine.GetBuildCost(AIMarine.BT_DOCK));
 	print("  BT_DEPOT: " + AIMarine.GetBuildCost(AIMarine.BT_DEPOT));
 	print("  BT_BUOY:  " + AIMarine.GetBuildCost(AIMarine.BT_BUOY));
+	print("  BT_LOCK:  " + AIMarine.GetBuildCost(AIMarine.BT_LOCK));
+	print("  BT_CANAL: " + AIMarine.GetBuildCost(AIMarine.BT_CANAL));
 	print(" -Tile-");
 	print("  BT_FOUNDATION:   " + AITile.GetBuildCost(AITile.BT_FOUNDATION));
 	print("  BT_TERRAFORM:    " + AITile.GetBuildCost(AITile.BT_TERRAFORM));
@@ -556,6 +560,26 @@ function Regression::Prices()
 	print("  BT_CLEAR_ROCKY:  " + AITile.GetBuildCost(AITile.BT_CLEAR_ROCKY));
 	print("  BT_CLEAR_FIELDS: " + AITile.GetBuildCost(AITile.BT_CLEAR_FIELDS));
 	print("  BT_CLEAR_HOUSE:  " + AITile.GetBuildCost(AITile.BT_CLEAR_HOUSE));
+	print("  BT_CLEAR_WATER:  " + AITile.GetBuildCost(AITile.BT_CLEAR_WATER));
+}
+
+function Regression::Commands()
+{
+	print("");
+	print("--Commands--");
+
+	print(" -Command accounting-");
+	local test = AITestMode();
+	local costs = AIAccounting();
+	AITile.DemolishTile(2834);
+	print("  Command cost:              " + costs.GetCosts());
+	{
+		local inner = AIAccounting();
+		print("  New inner cost scope:      " + costs.GetCosts());
+		AITile.DemolishTile(2835);
+		print("  Further command cost:      " + costs.GetCosts());
+	}
+	print("  Saved cost of outer scope: " + costs.GetCosts());
 }
 
 function cost_callback(old_path, new_tile, new_direction, self) { if (old_path == null) return 0; return old_path.GetCost() + 1; }
@@ -919,6 +943,9 @@ function Regression::Marine()
 
 	print("  BuildWaterDepot():    " + AIMarine.BuildWaterDepot(28479, 28480));
 	print("  BuildDock():          " + AIMarine.BuildDock(29253, AIStation.STATION_JOIN_ADJACENT));
+	print("  BuildBuoy():          " + AIMarine.BuildBuoy(28481));
+	print("  BuildLock():          " + AIMarine.BuildLock(28487));
+	print("  BuildCanal():         " + AIMarine.BuildCanal(28744));
 }
 
 function Regression::Order()
@@ -1017,6 +1044,30 @@ function Regression::Rail()
 	print("    IsRailTile():                  " + AIRail.IsRailTile(10002));
 	print("    BuildRailTrack():              " + AIRail.BuildRailTrack(10002, AIRail.RAILTRACK_NW_SE));
 	print("    BuildSignal():                 " + AIRail.BuildSignal(10002, 10258, AIRail.SIGNALTYPE_PBS));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10258));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 9746));
+	print("    RemoveSignal():                " + AIRail.RemoveSignal(10002, 10258));
+	print("    BuildSignal():                 " + AIRail.BuildSignal(10002, 9746, AIRail.SIGNALTYPE_ENTRY));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10258));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 9746));
+	print("    RemoveSignal():                " + AIRail.RemoveSignal(10002, 9746));
+	print("    BuildSignal():                 " + AIRail.BuildSignal(10002, 9746, AIRail.SIGNALTYPE_EXIT_TWOWAY));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10258));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 9746));
+	print("    RemoveRailTrack():             " + AIRail.RemoveRailTrack(10002, AIRail.RAILTRACK_NW_NE));
+	print("    RemoveRailTrack():             " + AIRail.RemoveRailTrack(10002, AIRail.RAILTRACK_NW_SE));
+	print("    BuildRailTrack():              " + AIRail.BuildRailTrack(10002, AIRail.RAILTRACK_NW_NE));
+	print("    BuildSignal():                 " + AIRail.BuildSignal(10002, 10003, AIRail.SIGNALTYPE_PBS));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10003));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10001));
+	print("    RemoveSignal():                " + AIRail.RemoveSignal(10002, 10003));
+	print("    BuildSignal():                 " + AIRail.BuildSignal(10002, 10001, AIRail.SIGNALTYPE_ENTRY));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10003));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10001));
+	print("    RemoveSignal():                " + AIRail.RemoveSignal(10002, 10001));
+	print("    BuildSignal():                 " + AIRail.BuildSignal(10002, 10001, AIRail.SIGNALTYPE_EXIT_TWOWAY));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10003));
+	print("    GetSignalType():               " + AIRail.GetSignalType(10002, 10001));
 	print("    RemoveRailTrack():             " + AIRail.RemoveRailTrack(10002, AIRail.RAILTRACK_NW_NE));
 	print("    RemoveRailTrack():             " + AIRail.RemoveRailTrack(10002, AIRail.RAILTRACK_NW_SE));
 	print("    BuildRail():                   " + AIRail.BuildRail(10002, 10003, 10006));
@@ -1057,6 +1108,7 @@ function Regression::Rail()
 	print("    IsRailTile():                  " + AIRail.IsRailTile(33411));
 	print("    BuildRailDepot():              " + AIRail.BuildRailDepot(0, 1));
 	print("    BuildRailDepot():              " + AIRail.BuildRailDepot(33411, 33411));
+	print("    BuildRailDepot():              " + AIRail.BuildRailDepot(33411, 33410));
 	print("    BuildRailDepot():              " + AIRail.BuildRailDepot(33411, 33414));
 	print("    BuildRailDepot():              " + AIRail.BuildRailDepot(33411, 33412));
 	print("    GetRailDepotFrontTile():       " + AIRail.GetRailDepotFrontTile(33411));
@@ -1153,6 +1205,7 @@ function Regression::Road()
 	print("    IsRoadTile():                  " + AIRoad.IsRoadTile(33411));
 	print("    BuildRoadDepot():              " + AIRoad.BuildRoadDepot(0, 1));
 	print("    BuildRoadDepot():              " + AIRoad.BuildRoadDepot(33411, 33411));
+	print("    BuildRoadDepot():              " + AIRoad.BuildRoadDepot(33411, 33410));
 	print("    BuildRoadDepot():              " + AIRoad.BuildRoadDepot(33411, 33414));
 	print("    BuildRoadDepot():              " + AIRoad.BuildRoadDepot(33411, 33412));
 	print("    HasRoadType(Road):             " + AIRoad.HasRoadType(33411, AIRoad.ROADTYPE_ROAD));
@@ -1302,6 +1355,21 @@ function Regression::Station()
 							AIStation.GetCargoPlannedFromVia(station0, station1, station2, cargo));
 				}
 			}
+		}
+	}
+}
+
+function Regression::StationList()
+{
+	print("");
+	print("--StationList--");
+	local road_stations = AIStationList(AIStation.STATION_TRUCK_STOP);
+	for (local st = road_stations.Begin(); !road_stations.IsEnd(); st = road_stations.Next()) {
+		print("  GetName(): " + AIStation.GetName(st));
+		print("  TileList_StationCoverage:");
+		local coverage = AITileList_StationCoverage(st);
+		for (local i = coverage.Begin(); !coverage.IsEnd(); i = coverage.Next()) {
+			print("    " + i);
 		}
 	}
 }
@@ -1470,9 +1538,41 @@ function Regression::TileList()
 		print("    " + i + " => " + list.GetValue(i));
 	}
 
-	list.AddRectangle(54421 - 256 * 2, 256 * 2 + 54421 + 8);
+	list.AddRectangle(0x6F3F, 0x7248);
 	list.Valuate(AITile.IsWaterTile);
-	print("  Water():             done");
+	print("  IsWaterTile():       done");
+	print("  Count():             " + list.Count());
+	print("  ListDump:");
+	for (local i = list.Begin(); !list.IsEnd(); i = list.Next()) {
+		print("    " + i + " => " + list.GetValue(i));
+	}
+
+	list.Valuate(AITile.IsSeaTile);
+	print("  IsSeaTile():         done");
+	print("  Count():             " + list.Count());
+	print("  ListDump:");
+	for (local i = list.Begin(); !list.IsEnd(); i = list.Next()) {
+		print("    " + i + " => " + list.GetValue(i));
+	}
+
+	list.Valuate(AITile.IsRiverTile);
+	print("  IsRiverTile()        done");
+	print("  Count():             " + list.Count());
+	print("  ListDump:");
+	for (local i = list.Begin(); !list.IsEnd(); i = list.Next()) {
+		print("    " + i + " => " + list.GetValue(i));
+	}
+
+	list.Valuate(AIMarine.IsCanalTile);
+	print("  IsCanalTile()        done");
+	print("  Count():             " + list.Count());
+	print("  ListDump:");
+	for (local i = list.Begin(); !list.IsEnd(); i = list.Next()) {
+		print("    " + i + " => " + list.GetValue(i));
+	}
+
+	list.Valuate(AITile.IsCoastTile);
+	print("  IsCoastTile()        done");
 	print("  Count():             " + list.Count());
 	print("  ListDump:");
 	for (local i = list.Begin(); !list.IsEnd(); i = list.Next()) {
@@ -1621,6 +1721,7 @@ function Regression::Vehicle()
 	print("  BuildVehicle():       " + AIVehicle.BuildVehicle(33417, 153));
 	print("  IsValidVehicle(12):   " + AIVehicle.IsValidVehicle(12));
 	print("  CloneVehicle():       " + AIVehicle.CloneVehicle(33417, 12, true));
+	print("  BuildVehicle():       " + AIVehicle.BuildVehicle(-1, 153));
 
 	local bank_after = AICompany.GetBankBalance(AICompany.COMPANY_SELF);
 
@@ -1729,10 +1830,17 @@ function Regression::Vehicle()
 	print("    GetLastErrorString():  " + AIError.GetLastErrorString());
 
 	local list = AIVehicleList();
+	local in_depot = AIVehicleList(AIVehicle.IsInDepot);
+	local IsType = function(vehicle_id, type) {
+		return AIVehicle.GetVehicleType(vehicle_id) == type;
+	}
+	local rv_list = AIVehicleList(IsType, AIVehicle.VT_ROAD);
 
 	print("");
 	print("--VehicleList--");
 	print("  Count():             " + list.Count());
+	print("  InDepot Count():     " + in_depot.Count());
+	print("  RoadVehicle Count(): " + rv_list.Count());
 	list.Valuate(AIVehicle.GetLocation);
 	print("  Location ListDump:");
 	for (local i = list.Begin(); !list.IsEnd(); i = list.Next()) {
@@ -1877,6 +1985,7 @@ function Regression::Start()
 	/* Do this first as it gains maximum loan (which is faked to quite a lot). */
 	this.Company();
 
+	this.Commands();
 	this.Airport();
 	this.Bridge();
 	this.BridgeList();
@@ -1896,6 +2005,7 @@ function Regression::Start()
 	this.Road();
 	this.Sign();
 	this.Station();
+	this.StationList();
 	this.Tile();
 	this.TileList();
 	this.Town();
@@ -1925,6 +2035,20 @@ function Regression::Start()
 				print("      VehicleID:         " + c.GetVehicleID());
 			} break;
 
+			case AIEvent.ET_COMPANY_RENAMED: {
+				local c = AIEventCompanyRenamed.Convert(e);
+				print("      EventName:         CompanyRenamed");
+				print("      CompanyID:         " + c.GetCompanyID());
+				print("      CompanyName:       " + c.GetNewName());
+			} break;
+
+			case AIEvent.ET_PRESIDENT_RENAMED: {
+				local c = AIEventPresidentRenamed.Convert(e);
+				print("      EventName:         PresidentRenamed");
+				print("      CompanyID:         " + c.GetCompanyID());
+				print("      PresidentName:     " + c.GetNewName());
+			} break;
+
 			default:
 				print("      Unknown Event");
 				break;
@@ -1933,5 +2057,12 @@ function Regression::Start()
 	print("  IsEventWaiting:        false");
 
 	this.Math();
+
+	/* Check Valuate() is actually limited, MUST BE THE LAST TEST. */
+	print("--Valuate() with excessive CPU usage--")
+	local list = AIList();
+	list.AddItem(0, 0);
+	local Infinite = function(id) { while(true); }
+	list.Valuate(Infinite);
 }
 

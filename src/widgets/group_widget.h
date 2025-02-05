@@ -11,12 +11,13 @@
 #define WIDGETS_GROUP_WIDGET_H
 
 /** Widgets of the #VehicleGroupWindow class. */
-enum GroupListWidgets {
+enum GroupListWidgets : WidgetID {
 	WID_GL_CAPTION,                  ///< Caption of the window.
 	WID_GL_GROUP_BY_ORDER,           ///< Group order.
 	WID_GL_GROUP_BY_DROPDOWN,        ///< Group by dropdown list.
 	WID_GL_SORT_BY_ORDER,            ///< Sort order.
 	WID_GL_SORT_BY_DROPDOWN,         ///< Sort by dropdown list.
+	WID_GL_FILTER_BY_CARGO,          ///< Filter vehicles by cargo type.
 	WID_GL_LIST_VEHICLE,             ///< List of the vehicles.
 	WID_GL_LIST_VEHICLE_SCROLLBAR,   ///< Scrollbar for the list.
 	WID_GL_AVAILABLE_VEHICLES,       ///< Available vehicles.

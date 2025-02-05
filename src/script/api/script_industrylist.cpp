@@ -13,27 +13,21 @@
 
 #include "../../safeguards.h"
 
-ScriptIndustryList::ScriptIndustryList()
+ScriptIndustryList::ScriptIndustryList(HSQUIRRELVM vm)
 {
-	for (const Industry *i : Industry::Iterate()) {
-		this->AddItem(i->index);
-	}
+	ScriptList::FillList<Industry>(vm, this);
 }
 
-ScriptIndustryList_CargoAccepting::ScriptIndustryList_CargoAccepting(CargoID cargo_id)
+ScriptIndustryList_CargoAccepting::ScriptIndustryList_CargoAccepting(CargoType cargo_type)
 {
-	for (const Industry *i : Industry::Iterate()) {
-		for (byte j = 0; j < lengthof(i->accepts_cargo); j++) {
-			if (i->accepts_cargo[j] == cargo_id) this->AddItem(i->index);
-		}
-	}
+	ScriptList::FillList<Industry>(this,
+		[cargo_type](const Industry *i) { return i->IsCargoAccepted(cargo_type); }
+	);
 }
 
-ScriptIndustryList_CargoProducing::ScriptIndustryList_CargoProducing(CargoID cargo_id)
+ScriptIndustryList_CargoProducing::ScriptIndustryList_CargoProducing(CargoType cargo_type)
 {
-	for (const Industry *i : Industry::Iterate()) {
-		for (byte j = 0; j < lengthof(i->produced_cargo); j++) {
-			if (i->produced_cargo[j] == cargo_id) this->AddItem(i->index);
-		}
-	}
+	ScriptList::FillList<Industry>(this,
+		[cargo_type](const Industry *i) { return i->IsCargoProduced(cargo_type); }
+	);
 }

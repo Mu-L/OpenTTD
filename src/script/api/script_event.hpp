@@ -57,10 +57,13 @@ public:
 		ET_STORYPAGE_BUTTON_CLICK,
 		ET_STORYPAGE_TILE_SELECT,
 		ET_STORYPAGE_VEHICLE_SELECT,
+		ET_COMPANY_RENAMED,
+		ET_PRESIDENT_RENAMED,
 	};
 
 	/**
 	 * Constructor of ScriptEvent, to get the type of event.
+	 * @param type The type of event to construct.
 	 */
 	ScriptEvent(ScriptEvent::ScriptEventType type) :
 		type(type)

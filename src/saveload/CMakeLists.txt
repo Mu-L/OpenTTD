@@ -19,6 +19,7 @@ add_files(
     group_sl.cpp
     industry_sl.cpp
     labelmaps_sl.cpp
+    league_sl.cpp
     linkgraph_sl.cpp
     map_sl.cpp
     misc_sl.cpp
@@ -29,6 +30,7 @@ add_files(
     oldloader.h
     oldloader_sl.cpp
     order_sl.cpp
+    randomizer_sl.cpp
     saveload.cpp
     saveload.h
     saveload_filter.h
@@ -43,4 +45,5 @@ add_files(
     town_sl.cpp
     vehicle_sl.cpp
     waypoint_sl.cpp
+    water_regions_sl.cpp
 )

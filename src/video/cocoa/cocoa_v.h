@@ -22,7 +22,8 @@ extern bool _cocoa_video_started;
 
 class VideoDriver_Cocoa : public VideoDriver {
 private:
-	Dimension orig_res;   ///< Saved window size for non-fullscreen mode.
+	Dimension orig_res;       ///< Saved window size for non-fullscreen mode.
+	bool refresh_sys_sprites; ///< System sprites need refreshing.
 
 public:
 	bool setup; ///< Window is currently being created.
@@ -34,7 +35,7 @@ public:
 	OTTD_CocoaWindowDelegate *delegate; //!< Window delegate object
 
 public:
-	VideoDriver_Cocoa();
+	VideoDriver_Cocoa(bool uses_hardware_acceleration = false);
 
 	void Stop() override;
 	void MainLoop() override;
@@ -44,6 +45,9 @@ public:
 
 	bool ChangeResolution(int w, int h) override;
 	bool ToggleFullscreen(bool fullscreen) override;
+
+	void ClearSystemSprites() override;
+	void PopulateSystemSprites() override;
 
 	void EditBoxLostFocus() override;
 
@@ -68,13 +72,13 @@ protected:
 
 	void GameSizeChanged();
 
-	const char *Initialize();
+	std::optional<std::string_view> Initialize();
 
 	void UpdateVideoModes();
 
 	bool MakeWindow(int width, int height);
 
-	virtual NSView* AllocateDrawView() = 0;
+	virtual NSView *AllocateDrawView() = 0;
 
 	/** Get a pointer to the video buffer. */
 	virtual void *GetVideoPointer() = 0;
@@ -95,7 +99,7 @@ private:
 	int window_height;    ///< Current window height in pixel
 	int window_pitch;
 
-	uint32 palette[256];  ///< Colour Palette
+	uint32_t palette[256];  ///< Colour Palette
 
 	void BlitIndexedToView32(int left, int top, int right, int bottom);
 	void UpdatePalette(uint first_color, uint num_colors);
@@ -105,11 +109,11 @@ public:
 
 	VideoDriver_CocoaQuartz();
 
-	const char *Start(const StringList &param) override;
+	std::optional<std::string_view> Start(const StringList &param) override;
 	void Stop() override;
 
 	/** Return driver name */
-	const char *GetName() const override { return "cocoa"; }
+	std::string_view GetName() const override { return "cocoa"; }
 
 	void AllocateBackingStore(bool force = false) override;
 
@@ -117,7 +121,7 @@ protected:
 	void Paint() override;
 	void CheckPaletteAnim() override;
 
-	NSView* AllocateDrawView() override;
+	NSView *AllocateDrawView() override;
 
 	void *GetVideoPointer() override { return this->buffer_depth == 8 ? this->pixel_buffer : this->window_buffer; }
 };

@@ -14,26 +14,26 @@
 #include "spritecache.h"
 
 /** Glyphs are characters from a font. */
-typedef uint32 GlyphID;
+typedef uint32_t GlyphID;
 static const GlyphID SPRITE_GLYPH = 1U << 30;
 
 /** Font cache for basic fonts. */
 class FontCache {
-private:
-	static FontCache *caches[FS_END]; ///< All the font caches.
 protected:
+	static FontCache *caches[FS_END]; ///< All the font caches.
 	FontCache *parent;                ///< The parent of this font cache.
 	const FontSize fs;                ///< The size of the font.
 	int height;                       ///< The height of the font.
 	int ascender;                     ///< The ascender value of the font.
 	int descender;                    ///< The descender value of the font.
-	int units_per_em;                 ///< The units per EM value of the font.
-
-	static int GetDefaultFontHeight(FontSize fs);
 
 public:
 	FontCache(FontSize fs);
 	virtual ~FontCache();
+
+	static void InitializeFontCaches();
+
+	static int GetDefaultFontHeight(FontSize fs);
 
 	/**
 	 * Get the FontSize of the font.
@@ -60,30 +60,17 @@ public:
 	inline int GetDescender() const{ return this->descender; }
 
 	/**
-	 * Get the units per EM value of the font.
-	 * @return The units per EM value of the font.
-	 */
-	inline int GetUnitsPerEM() const { return this->units_per_em; }
-
-	/**
 	 * Get the nominal font size of the font.
 	 * @return The nominal font size.
 	 */
 	virtual int GetFontSize() const { return this->height; }
 
 	/**
-	 * Get the SpriteID mapped to the given key
-	 * @param key The key to get the sprite for.
-	 * @return The sprite.
-	 */
-	virtual SpriteID GetUnicodeGlyph(WChar key) = 0;
-
-	/**
 	 * Map a SpriteID to the key
 	 * @param key The key to map to.
 	 * @param sprite The sprite that is being mapped.
 	 */
-	virtual void SetUnicodeGlyph(WChar key, SpriteID sprite) = 0;
+	virtual void SetUnicodeGlyph(char32_t key, SpriteID sprite) = 0;
 
 	/** Initialize the glyph map */
 	virtual void InitializeUnicodeGlyphMap() = 0;
@@ -114,17 +101,10 @@ public:
 	/**
 	 * Map a character into a glyph.
 	 * @param key The character.
+	 * @param fallback Allow fallback to the parent font.
 	 * @return The glyph ID used to draw the character.
 	 */
-	virtual GlyphID MapCharToGlyph(WChar key) = 0;
-
-	/**
-	 * Read a font table from the font.
-	 * @param tag The of the table to load.
-	 * @param length The length of the read data.
-	 * @return The loaded table data.
-	 */
-	virtual const void *GetFontTable(uint32 tag, size_t &length) = 0;
+	virtual GlyphID MapCharToGlyph(char32_t key, bool fallback = true) = 0;
 
 	/**
 	 * Get the native OS font handle, if there is one.
@@ -139,7 +119,7 @@ public:
 	 * Get the name of this font.
 	 * @return The name of the font.
 	 */
-	virtual const char *GetFontName() = 0;
+	virtual std::string GetFontName() = 0;
 
 	/**
 	 * Get the font cache of a given font size.
@@ -151,6 +131,8 @@ public:
 		assert(fs < FS_END);
 		return FontCache::caches[fs];
 	}
+
+	static std::string GetName(FontSize fs);
 
 	/**
 	 * Check whether the font cache has a parent.
@@ -166,27 +148,21 @@ public:
 	virtual bool IsBuiltInFont() = 0;
 };
 
-/** Get the SpriteID mapped to the given font size and key */
-static inline SpriteID GetUnicodeGlyph(FontSize size, WChar key)
-{
-	return FontCache::Get(size)->GetUnicodeGlyph(key);
-}
-
 /** Map a SpriteID to the font size and key */
-static inline void SetUnicodeGlyph(FontSize size, WChar key, SpriteID sprite)
+inline void SetUnicodeGlyph(FontSize size, char32_t key, SpriteID sprite)
 {
 	FontCache::Get(size)->SetUnicodeGlyph(key, sprite);
 }
 
 /** Initialize the glyph map */
-static inline void InitializeUnicodeGlyphMap()
+inline void InitializeUnicodeGlyphMap()
 {
 	for (FontSize fs = FS_BEGIN; fs < FS_END; fs++) {
 		FontCache::Get(fs)->InitializeUnicodeGlyphMap();
 	}
 }
 
-static inline void ClearFontCache()
+inline void ClearFontCache()
 {
 	for (FontSize fs = FS_BEGIN; fs < FS_END; fs++) {
 		FontCache::Get(fs)->ClearFontCache();
@@ -194,45 +170,66 @@ static inline void ClearFontCache()
 }
 
 /** Get the Sprite for a glyph */
-static inline const Sprite *GetGlyph(FontSize size, WChar key)
+inline const Sprite *GetGlyph(FontSize size, char32_t key)
 {
 	FontCache *fc = FontCache::Get(size);
 	return fc->GetGlyph(fc->MapCharToGlyph(key));
 }
 
 /** Get the width of a glyph */
-static inline uint GetGlyphWidth(FontSize size, WChar key)
+inline uint GetGlyphWidth(FontSize size, char32_t key)
 {
 	FontCache *fc = FontCache::Get(size);
 	return fc->GetGlyphWidth(fc->MapCharToGlyph(key));
 }
 
-static inline bool GetDrawGlyphShadow(FontSize size)
+inline bool GetDrawGlyphShadow(FontSize size)
 {
 	return FontCache::Get(size)->GetDrawGlyphShadow();
 }
 
-/** Settings for a single freetype font. */
-struct FreeTypeSubSetting {
+/** Settings for a single font. */
+struct FontCacheSubSetting {
 	std::string font; ///< The name of the font, or path to the font.
 	uint size;        ///< The (requested) size of the font.
-	bool aa;          ///< Whether to do anti aliasing or not.
 
 	const void *os_handle = nullptr; ///< Optional native OS font info. Only valid during font search.
 };
 
-/** Settings for the freetype fonts. */
-struct FreeTypeSettings {
-	FreeTypeSubSetting small;  ///< The smallest font; mostly used for zoomed out view.
-	FreeTypeSubSetting medium; ///< The normal font size.
-	FreeTypeSubSetting large;  ///< The largest font; mostly used for newspapers.
-	FreeTypeSubSetting mono;   ///< The mono space font used for license/readme viewers.
+/** Settings for the four different fonts. */
+struct FontCacheSettings {
+	FontCacheSubSetting small;  ///< The smallest font; mostly used for zoomed out view.
+	FontCacheSubSetting medium; ///< The normal font size.
+	FontCacheSubSetting large;  ///< The largest font; mostly used for newspapers.
+	FontCacheSubSetting mono;   ///< The mono space font used for license/readme viewers.
+	bool prefer_sprite;         ///< Whether to prefer the built-in sprite font over resizable fonts.
+	bool global_aa;             ///< Whether to anti alias all font sizes.
 };
 
-extern FreeTypeSettings _freetype;
+extern FontCacheSettings _fcsettings;
 
-void InitFreeType(bool monospace);
-void UninitFreeType();
-bool HasAntialiasedFonts();
+/**
+ * Get the settings of a given font size.
+ * @param fs The font size to look up.
+ * @return The settings.
+ */
+inline FontCacheSubSetting *GetFontCacheSubSetting(FontSize fs)
+{
+	switch (fs) {
+		default: NOT_REACHED();
+		case FS_SMALL:  return &_fcsettings.small;
+		case FS_NORMAL: return &_fcsettings.medium;
+		case FS_LARGE:  return &_fcsettings.large;
+		case FS_MONO:   return &_fcsettings.mono;
+	}
+}
+
+uint GetFontCacheFontSize(FontSize fs);
+std::string GetFontCacheFontName(FontSize fs);
+void InitFontCache(bool monospace);
+void UninitFontCache();
+
+bool GetFontAAState();
+void SetFont(FontSize fontsize, const std::string &font, uint size);
 
 #endif /* FONTCACHE_H */

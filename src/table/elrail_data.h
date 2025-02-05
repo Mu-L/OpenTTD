@@ -17,7 +17,7 @@
  * Tile Location group.
  * This defines whether the X and or Y coordinate of a tile is even
  */
-enum TLG {
+enum TLG : uint8_t {
 	XEVEN_YEVEN = 0,
 	XEVEN_YODD  = 1,
 	XODD_YEVEN  = 2,
@@ -30,7 +30,7 @@ enum TLG {
  * into account: the tile being drawn itself (the home tile, the one in
  * ti->tile), and the neighbouring tile
  */
-enum TileSource {
+enum TileSource : uint8_t {
 	TS_HOME      = 0,
 	TS_NEIGHBOUR = 1,
 
@@ -40,7 +40,7 @@ enum TileSource {
 static const uint NUM_TRACKS_AT_PCP = 6;
 
 /** Which PPPs are possible at all on a given PCP */
-static const byte AllowedPPPonPCP[DIAGDIR_END] = {
+static const uint8_t AllowedPPPonPCP[DIAGDIR_END] = {
 	1 << DIR_N | 1 << DIR_E  | 1 << DIR_SE | 1 << DIR_S | 1 << DIR_W  | 1 << DIR_NW,
 	1 << DIR_N | 1 << DIR_NE | 1 << DIR_E  | 1 << DIR_S | 1 << DIR_SW | 1 << DIR_W,
 	1 << DIR_N | 1 << DIR_E  | 1 << DIR_SE | 1 << DIR_S | 1 << DIR_W  | 1 << DIR_NW,
@@ -52,7 +52,7 @@ static const byte AllowedPPPonPCP[DIAGDIR_END] = {
  * the following system is used: if you rotate the PCP so that it is in the
  * north, the eastern PPP belongs to the tile.
  */
-static const byte OwnedPPPonPCP[DIAGDIR_END] = {
+static const uint8_t OwnedPPPonPCP[DIAGDIR_END] = {
 	1 << DIR_SE | 1 << DIR_S  | 1 << DIR_SW | 1 << DIR_W,
 	1 << DIR_N  | 1 << DIR_SW | 1 << DIR_W  | 1 << DIR_NW,
 	1 << DIR_N  | 1 << DIR_NE | 1 << DIR_E  | 1 << DIR_NW,
@@ -76,7 +76,7 @@ static const DiagDirection PCPpositions[TRACK_END][2] = {
  * which are not on either end of the track are fully preferred.
  * @see PCPpositions
  */
-static const byte PreferredPPPofTrackAtPCP[TRACK_END][DIAGDIR_END] = {
+static const uint8_t PreferredPPPofTrackAtPCP[TRACK_END][DIAGDIR_END] = {
 	{    // X
 		1 << DIR_NE | 1 << DIR_SE | 1 << DIR_NW, // NE
 		PCP_NOT_ON_TRACK,                        // SE
@@ -119,7 +119,7 @@ static const byte PreferredPPPofTrackAtPCP[TRACK_END][DIAGDIR_END] = {
  * so there are certain tiles which we ignore. A straight line is found if
  * we have exactly two PPPs.
  */
-static const byte IgnoredPCP[NUM_IGNORE_GROUPS][TLG_END][DIAGDIR_END] = {
+static const uint8_t IgnoredPCP[NUM_IGNORE_GROUPS][TLG_END][DIAGDIR_END] = {
 	{   // Ignore group 1, X and Y tracks
 		{     // X even, Y even
 			IGNORE_NONE,
@@ -194,7 +194,7 @@ static const byte IgnoredPCP[NUM_IGNORE_GROUPS][TLG_END][DIAGDIR_END] = {
 #undef NO_IGNORE
 
 /** Which pylons can definitely NOT be built */
-static const byte DisallowedPPPofTrackAtPCP[TRACK_END][DIAGDIR_END] = {
+static const uint8_t DisallowedPPPofTrackAtPCP[TRACK_END][DIAGDIR_END] = {
 	{1 << DIR_SW | 1 << DIR_NE, 0,           1 << DIR_SW | 1 << DIR_NE, 0          }, // X
 	{0,           1 << DIR_NW | 1 << DIR_SE, 0,           1 << DIR_NW | 1 << DIR_SE}, // Y
 	{1 << DIR_W | 1 << DIR_E,  0,           0,           1 << DIR_W | 1 << DIR_E }, // UPPER
@@ -245,16 +245,16 @@ static const Direction PPPorder[DIAGDIR_END][TLG_END][DIR_END] = {    //  X  -  
 	}
 };
 /* Geometric placement of the PCP relative to the tile origin */
-static const int8 x_pcp_offsets[DIAGDIR_END] = {0,  8, 16, 8};
-static const int8 y_pcp_offsets[DIAGDIR_END] = {8, 16,  8, 0};
+static const int8_t x_pcp_offsets[DIAGDIR_END] = {0,  8, 16, 8};
+static const int8_t y_pcp_offsets[DIAGDIR_END] = {8, 16,  8, 0};
 /* Geometric placement of the PPP relative to the PCP*/
-static const int8 x_ppp_offsets[DIR_END] = {-2, -4, -2,  0,  2,  4,  2,  0};
-static const int8 y_ppp_offsets[DIR_END] = {-2,  0,  2,  4,  2,  0, -2, -4};
+static const int8_t x_ppp_offsets[DIR_END] = {-2, -4, -2,  0,  2,  4,  2,  0};
+static const int8_t y_ppp_offsets[DIR_END] = {-2,  0,  2,  4,  2,  0, -2, -4};
 
 /**
  * Offset for pylon sprites from the base pylon sprite.
  */
-enum PylonSpriteOffset {
+enum PylonSpriteOffset : uint8_t {
 	PSO_Y_NE,
 	PSO_Y_SW,
 	PSO_X_NW,
@@ -266,7 +266,7 @@ enum PylonSpriteOffset {
 };
 
 /* The type of pylon to draw at each PPP */
-static const uint8 pylon_sprites[] = {
+static const uint8_t pylon_sprites[] = {
 	PSO_EW_N,
 	PSO_Y_NE,
 	PSO_NS_E,
@@ -280,7 +280,7 @@ static const uint8 pylon_sprites[] = {
 /**
  * Offset for wire sprites from the base wire sprite.
  */
-enum WireSpriteOffset {
+enum WireSpriteOffset : uint8_t {
 	WSO_X_SHORT,
 	WSO_Y_SHORT,
 	WSO_EW_SHORT,
@@ -315,19 +315,21 @@ enum WireSpriteOffset {
 };
 
 struct SortableSpriteStruct {
-	uint8 image_offset;
-	int8 x_offset;
-	int8 y_offset;
-	int8 x_size;
-	int8 y_size;
-	int8 z_size;
-	int8 z_offset;
+	uint8_t image_offset;
+	int8_t x_offset;
+	int8_t y_offset;
+	int8_t x_size;
+	int8_t y_size;
+	int8_t z_size;
+	int8_t z_offset;
 };
 
 /** Distance between wire and rail */
 static const uint ELRAIL_ELEVATION = 10;
 /** Wires that a draw one level higher than the north corner. */
-static const uint ELRAIL_ELEVRAISE = ELRAIL_ELEVATION + TILE_HEIGHT;
+static const uint ELRAIL_ELEVRAISE = ELRAIL_ELEVATION + TILE_HEIGHT + 1;
+/** Wires that a draw one level lower than the north corner. */
+static const uint ELRAIL_ELEVLOWER = ELRAIL_ELEVATION - 1;
 
 static const SortableSpriteStruct RailCatenarySpriteData[] = {
 /* X direction
@@ -345,9 +347,9 @@ static const SortableSpriteStruct RailCatenarySpriteData[] = {
 
 	/* "down" tiles
 		 * Wires */
-	{ WSO_X_SW_DOWN,     0,  7, 15,  8,  1, ELRAIL_ELEVATION }, //! 6: Wire in X pitch down, pylon on the SW end
-	{ WSO_X_NE_DOWN,     0,  7, 15,  8,  1, ELRAIL_ELEVATION }, //! 7: Wire in X pitch down, pylon on the NE end
-	{ WSO_X_SHORT_DOWN,  0,  7, 15,  8,  1, ELRAIL_ELEVATION }, //! 8: Wire in X pitch down, pylon on both ends
+	{ WSO_X_SW_DOWN,     0,  7, 15,  8,  1, ELRAIL_ELEVLOWER }, //! 6: Wire in X pitch down, pylon on the SW end
+	{ WSO_X_NE_DOWN,     0,  7, 15,  8,  1, ELRAIL_ELEVLOWER }, //! 7: Wire in X pitch down, pylon on the NE end
+	{ WSO_X_SHORT_DOWN,  0,  7, 15,  8,  1, ELRAIL_ELEVLOWER }, //! 8: Wire in X pitch down, pylon on both ends
 
 
 /* Y direction
@@ -365,9 +367,9 @@ static const SortableSpriteStruct RailCatenarySpriteData[] = {
 
 	/* "down" tiles
 		 * Wires */
-	{ WSO_Y_SE_DOWN,     7,  0,  8, 15,  1, ELRAIL_ELEVATION }, //!15: Wire in Y pitch down, pylon on the SE end
-	{ WSO_Y_NW_DOWN,     7,  0,  8, 15,  1, ELRAIL_ELEVATION }, //!16: Wire in Y pitch down, pylon on the NW end
-	{ WSO_Y_SHORT_DOWN,  7,  0,  8, 15,  1, ELRAIL_ELEVATION }, //!17: Wire in Y pitch down, pylon on both ends
+	{ WSO_Y_SE_DOWN,     7,  0,  8, 15,  1, ELRAIL_ELEVLOWER }, //!15: Wire in Y pitch down, pylon on the SE end
+	{ WSO_Y_NW_DOWN,     7,  0,  8, 15,  1, ELRAIL_ELEVLOWER }, //!16: Wire in Y pitch down, pylon on the NW end
+	{ WSO_Y_SHORT_DOWN,  7,  0,  8, 15,  1, ELRAIL_ELEVLOWER }, //!17: Wire in Y pitch down, pylon on both ends
 
 /* NS Direction */
 	{ WSO_NS_SHORT,      8,  0,  8,  8,  1, ELRAIL_ELEVATION }, //!18: LEFT  trackbit wire, pylon on both ends
@@ -417,7 +419,7 @@ static const SortableSpriteStruct RailCatenarySpriteData_Tunnel[] = {
  * <li>Position of the Pylon relative to the track</li>
  * <li>Position of the Pylon inside the tile</li></ol>
  */
-enum RailCatenarySprite {
+enum RailCatenarySprite : uint8_t {
 	WIRE_X_FLAT_SW,
 	WIRE_X_FLAT_NE,
 	WIRE_X_FLAT_BOTH,

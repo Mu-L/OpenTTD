@@ -17,11 +17,15 @@
 #include "../../tree_map.h"
 #include "../../town.h"
 #include "../../landscape.h"
+#include "../../landscape_cmd.h"
+#include "../../terraform_cmd.h"
+#include "../../tree_cmd.h"
 
 #include "../../safeguards.h"
 
 /* static */ bool ScriptTile::IsBuildable(TileIndex tile)
 {
+	EnforceDeityOrCompanyModeValid(false);
 	if (!::IsValidTile(tile)) return false;
 
 	switch (::GetTileType(tile)) {
@@ -41,10 +45,10 @@
 	}
 }
 
-/* static */ bool ScriptTile::IsBuildableRectangle(TileIndex tile, uint width, uint height)
+/* static */ bool ScriptTile::IsBuildableRectangle(TileIndex tile, SQInteger width, SQInteger height)
 {
 	/* Check whether we can extract valid X and Y */
-	if (!::IsValidTile(tile)) return false;
+	if (!::IsValidTile(tile) || width < 0 || height < 0) return false;
 
 	uint tx = ScriptMap::GetTileX(tile);
 	uint ty = ScriptMap::GetTileY(tile);
@@ -56,6 +60,20 @@
 	}
 
 	return true;
+}
+
+/* static */ bool ScriptTile::IsSeaTile(TileIndex tile)
+{
+	if (!::IsValidTile(tile)) return false;
+
+	return ::IsTileType(tile, MP_WATER) && ::IsSea(tile);
+}
+
+/* static */ bool ScriptTile::IsRiverTile(TileIndex tile)
+{
+	if (!::IsValidTile(tile)) return false;
+
+	return ::IsTileType(tile, MP_WATER) && ::IsRiver(tile);
 }
 
 /* static */ bool ScriptTile::IsWaterTile(TileIndex tile)
@@ -163,26 +181,25 @@
 	return (Slope)::ComplementSlope((::Slope)slope);
 }
 
-/* static */ int32 ScriptTile::GetMinHeight(TileIndex tile)
+/* static */ SQInteger ScriptTile::GetMinHeight(TileIndex tile)
 {
 	if (!::IsValidTile(tile)) return -1;
 
 	return ::GetTileZ(tile);
 }
 
-/* static */ int32 ScriptTile::GetMaxHeight(TileIndex tile)
+/* static */ SQInteger ScriptTile::GetMaxHeight(TileIndex tile)
 {
 	if (!::IsValidTile(tile)) return -1;
 
 	return ::GetTileMaxZ(tile);
 }
 
-/* static */ int32 ScriptTile::GetCornerHeight(TileIndex tile, Corner corner)
+/* static */ SQInteger ScriptTile::GetCornerHeight(TileIndex tile, Corner corner)
 {
 	if (!::IsValidTile(tile) || !::IsValidCorner((::Corner)corner)) return -1;
 
-	int z;
-	::Slope slope = ::GetTileSlope(tile, &z);
+	auto [slope, z] = ::GetTileSlopeZ(tile);
 	return (z + ::GetSlopeZInCorner(slope, (::Corner)corner));
 }
 
@@ -192,7 +209,7 @@
 	if (::IsTileType(tile, MP_HOUSE)) return ScriptCompany::COMPANY_INVALID;
 	if (::IsTileType(tile, MP_INDUSTRY)) return ScriptCompany::COMPANY_INVALID;
 
-	return ScriptCompany::ResolveCompanyID((ScriptCompany::CompanyID)(byte)::GetTileOwner(tile));
+	return ScriptCompany::ResolveCompanyID((ScriptCompany::CompanyID)(uint8_t)::GetTileOwner(tile));
 }
 
 /* static */ bool ScriptTile::HasTransportType(TileIndex tile, TransportType transport_type)
@@ -207,7 +224,7 @@
 	}
 }
 
-/* static */ int32 ScriptTile::GetCargoAcceptance(TileIndex tile, CargoID cargo_type, int width, int height, int radius)
+/* static */ SQInteger ScriptTile::GetCargoAcceptance(TileIndex tile, CargoType cargo_type, SQInteger width, SQInteger height, SQInteger radius)
 {
 	if (!::IsValidTile(tile) || width <= 0 || height <= 0 || radius < 0 || !ScriptCargo::IsValidCargo(cargo_type)) return -1;
 
@@ -215,7 +232,7 @@
 	return acceptance[cargo_type];
 }
 
-/* static */ int32 ScriptTile::GetCargoProduction(TileIndex tile, CargoID cargo_type, int width, int height, int radius)
+/* static */ SQInteger ScriptTile::GetCargoProduction(TileIndex tile, CargoType cargo_type, SQInteger width, SQInteger height, SQInteger radius)
 {
 	if (!::IsValidTile(tile) || width <= 0 || height <= 0 || radius < 0 || !ScriptCargo::IsValidCargo(cargo_type)) return -1;
 
@@ -223,65 +240,67 @@
 	return produced[cargo_type];
 }
 
-/* static */ int32 ScriptTile::GetDistanceManhattanToTile(TileIndex tile_from, TileIndex tile_to)
+/* static */ SQInteger ScriptTile::GetDistanceManhattanToTile(TileIndex tile_from, TileIndex tile_to)
 {
 	return ScriptMap::DistanceManhattan(tile_from, tile_to);
 }
 
-/* static */ int32 ScriptTile::GetDistanceSquareToTile(TileIndex tile_from, TileIndex tile_to)
+/* static */ SQInteger ScriptTile::GetDistanceSquareToTile(TileIndex tile_from, TileIndex tile_to)
 {
 	return ScriptMap::DistanceSquare(tile_from, tile_to);
 }
 
-/* static */ bool ScriptTile::RaiseTile(TileIndex tile, int32 slope)
+/* static */ bool ScriptTile::RaiseTile(TileIndex tile, Slope slope)
 {
-	EnforcePrecondition(false, ScriptObject::GetCompany() != OWNER_DEITY);
-	EnforcePrecondition(false, tile < ::MapSize());
+	EnforceCompanyModeValid(false);
+	EnforcePrecondition(false, tile < ScriptMap::GetMapSize());
 
-	return ScriptObject::DoCommand(tile, slope, 1, CMD_TERRAFORM_LAND);
+	return ScriptObject::Command<CMD_TERRAFORM_LAND>::Do(tile, (::Slope)slope, true);
 }
 
-/* static */ bool ScriptTile::LowerTile(TileIndex tile, int32 slope)
+/* static */ bool ScriptTile::LowerTile(TileIndex tile, Slope slope)
 {
-	EnforcePrecondition(false, ScriptObject::GetCompany() != OWNER_DEITY);
-	EnforcePrecondition(false, tile < ::MapSize());
+	EnforceCompanyModeValid(false);
+	EnforcePrecondition(false, tile < ScriptMap::GetMapSize());
 
-	return ScriptObject::DoCommand(tile, slope, 0, CMD_TERRAFORM_LAND);
+	return ScriptObject::Command<CMD_TERRAFORM_LAND>::Do(tile, (::Slope)slope, false);
 }
 
 /* static */ bool ScriptTile::LevelTiles(TileIndex start_tile, TileIndex end_tile)
 {
-	EnforcePrecondition(false, ScriptObject::GetCompany() != OWNER_DEITY);
-	EnforcePrecondition(false, start_tile < ::MapSize());
-	EnforcePrecondition(false, end_tile < ::MapSize());
+	EnforceCompanyModeValid(false);
+	EnforcePrecondition(false, start_tile < ScriptMap::GetMapSize());
+	EnforcePrecondition(false, end_tile < ScriptMap::GetMapSize());
 
-	return ScriptObject::DoCommand(end_tile, start_tile, LM_LEVEL << 1, CMD_LEVEL_LAND);
+	return ScriptObject::Command<CMD_LEVEL_LAND>::Do(end_tile, start_tile, false, LM_LEVEL);
 }
 
 /* static */ bool ScriptTile::DemolishTile(TileIndex tile)
 {
+	EnforceDeityOrCompanyModeValid(false);
 	EnforcePrecondition(false, ::IsValidTile(tile));
 
-	return ScriptObject::DoCommand(tile, 0, 0, CMD_LANDSCAPE_CLEAR);
+	return ScriptObject::Command<CMD_LANDSCAPE_CLEAR>::Do(tile);
 }
 
 /* static */ bool ScriptTile::PlantTree(TileIndex tile)
 {
-	EnforcePrecondition(false, ScriptObject::GetCompany() != OWNER_DEITY);
+	EnforceCompanyModeValid(false);
 	EnforcePrecondition(false, ::IsValidTile(tile));
 
-	return ScriptObject::DoCommand(tile, TREE_INVALID, tile, CMD_PLANT_TREE);
+	return ScriptObject::Command<CMD_PLANT_TREE>::Do(tile, tile, TREE_INVALID, false);
 }
 
-/* static */ bool ScriptTile::PlantTreeRectangle(TileIndex tile, uint width, uint height)
+/* static */ bool ScriptTile::PlantTreeRectangle(TileIndex tile, SQInteger width, SQInteger height)
 {
-	EnforcePrecondition(false, ScriptObject::GetCompany() != OWNER_DEITY);
+	EnforceCompanyModeValid(false);
 	EnforcePrecondition(false, ::IsValidTile(tile));
 	EnforcePrecondition(false, width >= 1 && width <= 20);
 	EnforcePrecondition(false, height >= 1 && height <= 20);
-	TileIndex end_tile = tile + ::TileDiffXY(width - 1, height - 1);
+	TileIndex end_tile = TileAddWrap(tile, width - 1, height - 1);
+	EnforcePrecondition(false, ::IsValidTile(end_tile));
 
-	return ScriptObject::DoCommand(tile, TREE_INVALID, end_tile, CMD_PLANT_TREE);
+	return ScriptObject::Command<CMD_PLANT_TREE>::Do(tile, end_tile, TREE_INVALID, false);
 }
 
 /* static */ bool ScriptTile::IsWithinTownInfluence(TileIndex tile, TownID town_id)
@@ -320,6 +339,7 @@
 		case BT_CLEAR_ROCKY:  return ::GetPrice(PR_CLEAR_ROCKS, 1, nullptr);
 		case BT_CLEAR_FIELDS: return ::GetPrice(PR_CLEAR_FIELDS, 1, nullptr);
 		case BT_CLEAR_HOUSE:  return ::GetPrice(PR_CLEAR_HOUSE, 1, nullptr);
+		case BT_CLEAR_WATER:  return ::GetPrice(PR_CLEAR_WATER, 1, nullptr);
 		default: return -1;
 	}
 }

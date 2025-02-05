@@ -26,16 +26,25 @@
 #include "vehicle_func.h"
 #include "autoreplace_gui.h"
 #include "string_func.h"
-#include "widgets/dropdown_func.h"
+#include "dropdown_type.h"
+#include "dropdown_func.h"
 #include "timetable.h"
 #include "articulated_vehicles.h"
 #include "spritecache.h"
 #include "core/geometry_func.hpp"
+#include "core/container_func.hpp"
 #include "company_base.h"
 #include "engine_func.h"
 #include "station_base.h"
 #include "tilehighlight_func.h"
 #include "zoom_func.h"
+#include "depot_cmd.h"
+#include "vehicle_cmd.h"
+#include "order_cmd.h"
+#include "roadveh_cmd.h"
+#include "train_cmd.h"
+#include "hotkeys.h"
+#include "group_cmd.h"
 
 #include "safeguards.h"
 
@@ -69,7 +78,7 @@ static bool VehicleIndividualToGroupSorterWrapper(GUIVehicleGroup const &a, GUIV
 	return func(*(a.vehicles_begin), *(b.vehicles_begin));
 }
 
-BaseVehicleListWindow::VehicleGroupSortFunction * const BaseVehicleListWindow::vehicle_group_none_sorter_funcs[] = {
+const std::initializer_list<BaseVehicleListWindow::VehicleGroupSortFunction * const> BaseVehicleListWindow::vehicle_group_none_sorter_funcs = {
 	&VehicleIndividualToGroupSorterWrapper<VehicleNumberSorter>,
 	&VehicleIndividualToGroupSorterWrapper<VehicleNameSorter>,
 	&VehicleIndividualToGroupSorterWrapper<VehicleAgeSorter>,
@@ -85,7 +94,7 @@ BaseVehicleListWindow::VehicleGroupSortFunction * const BaseVehicleListWindow::v
 	&VehicleIndividualToGroupSorterWrapper<VehicleTimetableDelaySorter>,
 };
 
-const StringID BaseVehicleListWindow::vehicle_group_none_sorter_names[] = {
+const std::initializer_list<const StringID> BaseVehicleListWindow::vehicle_group_none_sorter_names_calendar = {
 	STR_SORT_BY_NUMBER,
 	STR_SORT_BY_NAME,
 	STR_SORT_BY_AGE,
@@ -99,10 +108,25 @@ const StringID BaseVehicleListWindow::vehicle_group_none_sorter_names[] = {
 	STR_SORT_BY_LENGTH,
 	STR_SORT_BY_LIFE_TIME,
 	STR_SORT_BY_TIMETABLE_DELAY,
-	INVALID_STRING_ID
 };
 
-BaseVehicleListWindow::VehicleGroupSortFunction * const BaseVehicleListWindow::vehicle_group_shared_orders_sorter_funcs[] = {
+const std::initializer_list<const StringID> BaseVehicleListWindow::vehicle_group_none_sorter_names_wallclock = {
+	STR_SORT_BY_NUMBER,
+	STR_SORT_BY_NAME,
+	STR_SORT_BY_AGE,
+	STR_SORT_BY_PROFIT_THIS_PERIOD,
+	STR_SORT_BY_PROFIT_LAST_PERIOD,
+	STR_SORT_BY_TOTAL_CAPACITY_PER_CARGOTYPE,
+	STR_SORT_BY_RELIABILITY,
+	STR_SORT_BY_MAX_SPEED,
+	STR_SORT_BY_MODEL,
+	STR_SORT_BY_VALUE,
+	STR_SORT_BY_LENGTH,
+	STR_SORT_BY_LIFE_TIME,
+	STR_SORT_BY_TIMETABLE_DELAY,
+};
+
+const std::initializer_list<BaseVehicleListWindow::VehicleGroupSortFunction * const> BaseVehicleListWindow::vehicle_group_shared_orders_sorter_funcs = {
 	&VehicleGroupLengthSorter,
 	&VehicleGroupTotalProfitThisYearSorter,
 	&VehicleGroupTotalProfitLastYearSorter,
@@ -110,19 +134,25 @@ BaseVehicleListWindow::VehicleGroupSortFunction * const BaseVehicleListWindow::v
 	&VehicleGroupAverageProfitLastYearSorter,
 };
 
-const StringID BaseVehicleListWindow::vehicle_group_shared_orders_sorter_names[] = {
+const std::initializer_list<const StringID> BaseVehicleListWindow::vehicle_group_shared_orders_sorter_names_calendar = {
 	STR_SORT_BY_NUM_VEHICLES,
 	STR_SORT_BY_TOTAL_PROFIT_THIS_YEAR,
 	STR_SORT_BY_TOTAL_PROFIT_LAST_YEAR,
 	STR_SORT_BY_AVERAGE_PROFIT_THIS_YEAR,
 	STR_SORT_BY_AVERAGE_PROFIT_LAST_YEAR,
-	INVALID_STRING_ID
 };
 
-const StringID BaseVehicleListWindow::vehicle_group_by_names[] = {
+const std::initializer_list<const StringID> BaseVehicleListWindow::vehicle_group_shared_orders_sorter_names_wallclock = {
+	STR_SORT_BY_NUM_VEHICLES,
+	STR_SORT_BY_TOTAL_PROFIT_THIS_PERIOD,
+	STR_SORT_BY_TOTAL_PROFIT_LAST_PERIOD,
+	STR_SORT_BY_AVERAGE_PROFIT_THIS_PERIOD,
+	STR_SORT_BY_AVERAGE_PROFIT_LAST_PERIOD,
+};
+
+const std::initializer_list<const StringID> BaseVehicleListWindow::vehicle_group_by_names = {
 	STR_GROUP_BY_NONE,
 	STR_GROUP_BY_SHARED_ORDERS,
-	INVALID_STRING_ID
 };
 
 const StringID BaseVehicleListWindow::vehicle_depot_name[] = {
@@ -132,10 +162,23 @@ const StringID BaseVehicleListWindow::vehicle_depot_name[] = {
 	STR_VEHICLE_LIST_SEND_AIRCRAFT_TO_HANGAR
 };
 
-BaseVehicleListWindow::BaseVehicleListWindow(WindowDesc *desc, WindowNumber wno) : Window(desc), vli(VehicleListIdentifier::UnPack(wno))
+BaseVehicleListWindow::BaseVehicleListWindow(WindowDesc &desc, const VehicleListIdentifier &vli) : Window(desc), vli(vli)
 {
+	this->vehicle_sel = INVALID_VEHICLE;
 	this->grouping = _grouping[vli.type][vli.vtype];
 	this->UpdateSortingFromGrouping();
+}
+
+std::span<const StringID> BaseVehicleListWindow::GetVehicleSorterNames()
+{
+	switch (this->grouping) {
+		case GB_NONE:
+			return TimerGameEconomy::UsingWallclockUnits() ? vehicle_group_none_sorter_names_wallclock : vehicle_group_none_sorter_names_calendar;
+		case GB_SHARED_ORDERS:
+			return TimerGameEconomy::UsingWallclockUnits() ? vehicle_group_shared_orders_sorter_names_wallclock : vehicle_group_shared_orders_sorter_names_calendar;
+		default:
+			NOT_REACHED();
+	}
 }
 
 /**
@@ -182,6 +225,14 @@ void BaseVehicleListWindow::BuildVehicleList()
 
 	GenerateVehicleSortList(&this->vehicles, this->vli);
 
+	CargoTypes used = 0;
+	for (const Vehicle *v : this->vehicles) {
+		for (const Vehicle *u = v; u != nullptr; u = u->Next()) {
+			if (u->cargo_cap > 0) SetBit(used, u->cargo_type);
+		}
+	}
+	this->used_cargoes = used;
+
 	if (this->grouping == GB_NONE) {
 		uint max_unitnumber = 0;
 		for (auto it = this->vehicles.begin(); it != this->vehicles.end(); ++it) {
@@ -213,18 +264,198 @@ void BaseVehicleListWindow::BuildVehicleList()
 
 		this->unitnumber_digits = CountDigitsForAllocatingSpace(max_num_vehicles);
 	}
+	this->FilterVehicleList();
 
 	this->vehgroups.RebuildDone();
-	this->vscroll->SetCount(static_cast<int>(this->vehgroups.size()));
+	this->vscroll->SetCount(this->vehgroups.size());
+}
+
+/**
+ * Check whether a single vehicle should pass the filter.
+ *
+ * @param v The vehicle to check.
+ * @param cargo_type The cargo to filter for.
+ * @return true iff the vehicle carries the cargo.
+ */
+static bool CargoFilterSingle(const Vehicle *v, const CargoType cargo_type)
+{
+	if (cargo_type == CargoFilterCriteria::CF_ANY) {
+		return true;
+	} else if (cargo_type == CargoFilterCriteria::CF_NONE) {
+		for (const Vehicle *w = v; w != nullptr; w = w->Next()) {
+			if (w->cargo_cap > 0) {
+				return false;
+			}
+		}
+		return true;
+	} else if (cargo_type == CargoFilterCriteria::CF_FREIGHT) {
+		bool have_capacity = false;
+		for (const Vehicle *w = v; w != nullptr; w = w->Next()) {
+			if (w->cargo_cap > 0) {
+				if (IsCargoInClass(w->cargo_type, CC_PASSENGERS)) {
+					return false;
+				} else {
+					have_capacity = true;
+				}
+			}
+		}
+		return have_capacity;
+	} else {
+		for (const Vehicle *w = v; w != nullptr; w = w->Next()) {
+			if (w->cargo_cap > 0 && w->cargo_type == cargo_type) {
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+/**
+ * Check whether a vehicle can carry a specific cargo.
+ *
+ * @param vehgroup The vehicle group which contains the vehicle to be checked
+ * @param cargo_type The cargo what we are looking for
+ * @return Whether the vehicle can carry the specified cargo or not
+ */
+static bool CargoFilter(const GUIVehicleGroup *vehgroup, const CargoType cargo_type)
+{
+	auto it = vehgroup->vehicles_begin;
+
+	/* Check if any vehicle in the group matches; if so, the whole group does. */
+	for (; it != vehgroup->vehicles_end; it++) {
+		if (CargoFilterSingle(*it, cargo_type)) return true;
+	}
+
+	return false;
+}
+
+/**
+ * Test if cargo icon overlays should be drawn.
+ * @returns true iff cargo icon overlays should be drawn.
+ */
+bool ShowCargoIconOverlay()
+{
+	return _shift_pressed && _ctrl_pressed;
+}
+
+/**
+ * Add a cargo icon to the list of overlays.
+ * @param overlays List of overlays.
+ * @param x Horizontal position.
+ * @param width Width available.
+ * @param v Vehicle to add.
+ */
+void AddCargoIconOverlay(std::vector<CargoIconOverlay> &overlays, int x, int width, const Vehicle *v)
+{
+	bool rtl = _current_text_dir == TD_RTL;
+	if (!v->IsArticulatedPart() || v->cargo_type != v->Previous()->cargo_type) {
+		/* Add new overlay slot. */
+		overlays.emplace_back(rtl ? x - width : x, rtl ? x : x + width, v->cargo_type, v->cargo_cap);
+	} else {
+		/* This is an articulated part with the same cargo type, adjust left or right of last overlay slot. */
+		if (rtl) {
+			overlays.back().left -= width;
+		} else {
+			overlays.back().right += width;
+		}
+		overlays.back().cargo_cap += v->cargo_cap;
+	}
+}
+
+/**
+ * Draw a cargo icon overlaying an existing sprite, with a black contrast outline.
+ * @param x Horizontal position from left.
+ * @param y Vertical position from top.
+ * @param cargo_type Cargo type to draw icon for.
+ */
+void DrawCargoIconOverlay(int x, int y, CargoType cargo_type)
+{
+	if (!ShowCargoIconOverlay()) return;
+	if (!IsValidCargoType(cargo_type)) return;
+
+	const CargoSpec *cs = CargoSpec::Get(cargo_type);
+
+	SpriteID spr = cs->GetCargoIcon();
+	if (spr == 0) return;
+
+	Dimension d = GetSpriteSize(spr);
+	d.width /= 2;
+	d.height /= 2;
+	int one = ScaleGUITrad(1);
+
+	/* Draw the cargo icon in black shifted 4 times to create the outline. */
+	DrawSprite(spr, PALETTE_ALL_BLACK, x - d.width - one, y - d.height);
+	DrawSprite(spr, PALETTE_ALL_BLACK, x - d.width + one, y - d.height);
+	DrawSprite(spr, PALETTE_ALL_BLACK, x - d.width, y - d.height - one);
+	DrawSprite(spr, PALETTE_ALL_BLACK, x - d.width, y - d.height + one);
+	/* Draw the cargo icon normally. */
+	DrawSprite(spr, PAL_NONE, x - d.width, y - d.height);
+}
+
+/**
+ * Draw a list of cargo icon overlays.
+ * @param overlays List of overlays.
+ * @param y Vertical position.
+ */
+void DrawCargoIconOverlays(std::span<const CargoIconOverlay> overlays, int y)
+{
+	for (const auto &cio : overlays) {
+		if (cio.cargo_cap == 0) continue;
+		DrawCargoIconOverlay((cio.left + cio.right) / 2, y, cio.cargo_type);
+	}
+}
+
+static GUIVehicleGroupList::FilterFunction * const _vehicle_group_filter_funcs[] = {
+	&CargoFilter,
+};
+
+/**
+ * Set cargo filter for the vehicle group list.
+ * @param cargo_type The cargo to be set.
+ */
+void BaseVehicleListWindow::SetCargoFilter(CargoType cargo_type)
+{
+	if (this->cargo_filter_criteria != cargo_type) {
+		this->cargo_filter_criteria = cargo_type;
+		/* Deactivate filter if criteria is 'Show All', activate it otherwise. */
+		this->vehgroups.SetFilterState(this->cargo_filter_criteria != CargoFilterCriteria::CF_ANY);
+		this->vehgroups.SetFilterType(0);
+		this->vehgroups.ForceRebuild();
+	}
+}
+
+/**
+ *Populate the filter list and set the cargo filter criteria.
+ */
+void BaseVehicleListWindow::SetCargoFilterArray()
+{
+	this->cargo_filter_criteria = CargoFilterCriteria::CF_ANY;
+	this->vehgroups.SetFilterFuncs(_vehicle_group_filter_funcs);
+	this->vehgroups.SetFilterState(this->cargo_filter_criteria != CargoFilterCriteria::CF_ANY);
+}
+
+/**
+ *Filter the engine list against the currently selected cargo filter.
+ */
+void BaseVehicleListWindow::FilterVehicleList()
+{
+	this->vehgroups.Filter(this->cargo_filter_criteria);
+	if (this->vehicles.empty()) {
+		/* No vehicle passed through the filter, invalidate the previously selected vehicle */
+		this->vehicle_sel = INVALID_VEHICLE;
+	} else if (this->vehicle_sel != INVALID_VEHICLE && std::ranges::find(this->vehicles, Vehicle::Get(this->vehicle_sel)) == this->vehicles.end()) { // previously selected engine didn't pass the filter, remove selection
+		this->vehicle_sel = INVALID_VEHICLE;
+	}
 }
 
 /**
  * Compute the size for the Action dropdown.
  * @param show_autoreplace If true include the autoreplace item.
  * @param show_group If true include group-related stuff.
+ * @param show_create If true include group-create item.
  * @return Required size.
  */
-Dimension BaseVehicleListWindow::GetActionDropdownSize(bool show_autoreplace, bool show_group)
+Dimension BaseVehicleListWindow::GetActionDropdownSize(bool show_autoreplace, bool show_group, bool show_create)
 {
 	Dimension d = {0, 0};
 
@@ -235,6 +466,8 @@ Dimension BaseVehicleListWindow::GetActionDropdownSize(bool show_autoreplace, bo
 	if (show_group) {
 		d = maxdim(d, GetStringBoundingBox(STR_GROUP_ADD_SHARED_VEHICLE));
 		d = maxdim(d, GetStringBoundingBox(STR_GROUP_REMOVE_ALL_VEHICLES));
+	} else if (show_create) {
+		d = maxdim(d, GetStringBoundingBox(STR_VEHICLE_LIST_CREATE_GROUP));
 	}
 
 	return d;
@@ -242,27 +475,76 @@ Dimension BaseVehicleListWindow::GetActionDropdownSize(bool show_autoreplace, bo
 
 void BaseVehicleListWindow::OnInit()
 {
-	this->order_arrow_width = GetStringBoundingBox(STR_TINY_RIGHT_ARROW).width;
+	this->order_arrow_width = GetStringBoundingBox(STR_JUST_RIGHT_ARROW, FS_SMALL).width;
+	this->SetCargoFilterArray();
+}
+
+StringID BaseVehicleListWindow::GetCargoFilterLabel(CargoType cargo_type) const
+{
+	switch (cargo_type) {
+		case CargoFilterCriteria::CF_ANY: return STR_CARGO_TYPE_FILTER_ALL;
+		case CargoFilterCriteria::CF_FREIGHT: return STR_CARGO_TYPE_FILTER_FREIGHT;
+		case CargoFilterCriteria::CF_NONE: return STR_CARGO_TYPE_FILTER_NONE;
+		default: return CargoSpec::Get(cargo_type)->name;
+	}
+}
+
+/**
+ * Build drop down list for cargo filter selection.
+ * @param full If true, build list with all cargo types, instead of only used cargo types.
+ * @return Drop down list for cargo filter.
+ */
+DropDownList BaseVehicleListWindow::BuildCargoDropDownList(bool full) const
+{
+	DropDownList list;
+
+	/* Add item for disabling filtering. */
+	list.push_back(MakeDropDownListStringItem(this->GetCargoFilterLabel(CargoFilterCriteria::CF_ANY), CargoFilterCriteria::CF_ANY));
+	/* Add item for freight (i.e. vehicles with cargo capacity and with no passenger capacity). */
+	list.push_back(MakeDropDownListStringItem(this->GetCargoFilterLabel(CargoFilterCriteria::CF_FREIGHT), CargoFilterCriteria::CF_FREIGHT));
+	/* Add item for vehicles not carrying anything, e.g. train engines. */
+	list.push_back(MakeDropDownListStringItem(this->GetCargoFilterLabel(CargoFilterCriteria::CF_NONE), CargoFilterCriteria::CF_NONE));
+
+	/* Add cargos */
+	Dimension d = GetLargestCargoIconSize();
+	for (const CargoSpec *cs : _sorted_cargo_specs) {
+		if (!full && !HasBit(this->used_cargoes, cs->Index())) continue;
+		list.push_back(MakeDropDownListIconItem(d, cs->GetCargoIcon(), PAL_NONE, cs->name, cs->Index(), false, !HasBit(this->used_cargoes, cs->Index())));
+	}
+
+	return list;
 }
 
 /**
  * Display the Action dropdown window.
  * @param show_autoreplace If true include the autoreplace item.
  * @param show_group If true include group-related stuff.
+ * @param show_create If true include group-create item.
  * @return Itemlist for dropdown
  */
-DropDownList BaseVehicleListWindow::BuildActionDropdownList(bool show_autoreplace, bool show_group)
+DropDownList BaseVehicleListWindow::BuildActionDropdownList(bool show_autoreplace, bool show_group, bool show_create)
 {
 	DropDownList list;
 
-	if (show_autoreplace) list.emplace_back(new DropDownListStringItem(STR_VEHICLE_LIST_REPLACE_VEHICLES, ADI_REPLACE, false));
-	list.emplace_back(new DropDownListStringItem(STR_VEHICLE_LIST_SEND_FOR_SERVICING, ADI_SERVICE, false));
-	list.emplace_back(new DropDownListStringItem(this->vehicle_depot_name[this->vli.vtype], ADI_DEPOT, false));
-
-	if (show_group) {
-		list.emplace_back(new DropDownListStringItem(STR_GROUP_ADD_SHARED_VEHICLE, ADI_ADD_SHARED, false));
-		list.emplace_back(new DropDownListStringItem(STR_GROUP_REMOVE_ALL_VEHICLES, ADI_REMOVE_ALL, false));
+	/* Autoreplace actions. */
+	if (show_autoreplace) {
+		list.push_back(MakeDropDownListStringItem(STR_VEHICLE_LIST_REPLACE_VEHICLES, ADI_REPLACE));
+		list.push_back(MakeDropDownListDividerItem());
 	}
+
+	/* Group actions. */
+	if (show_group) {
+		list.push_back(MakeDropDownListStringItem(STR_GROUP_ADD_SHARED_VEHICLE, ADI_ADD_SHARED));
+		list.push_back(MakeDropDownListStringItem(STR_GROUP_REMOVE_ALL_VEHICLES, ADI_REMOVE_ALL));
+		list.push_back(MakeDropDownListDividerItem());
+	} else if (show_create) {
+		list.push_back(MakeDropDownListStringItem(STR_VEHICLE_LIST_CREATE_GROUP, ADI_CREATE_GROUP));
+		list.push_back(MakeDropDownListDividerItem());
+	}
+
+	/* Depot actions. */
+	list.push_back(MakeDropDownListStringItem(STR_VEHICLE_LIST_SEND_FOR_SERVICING, ADI_SERVICE));
+	list.push_back(MakeDropDownListStringItem(this->vehicle_depot_name[this->vli.vtype], ADI_DEPOT));
 
 	return list;
 }
@@ -285,7 +567,7 @@ void DepotSortList(VehicleList *list)
 }
 
 /** draw the vehicle profit button in the vehicle list window. */
-static void DrawVehicleProfitButton(Date age, Money display_profit_last_year, uint num_vehicles, int x, int y)
+static void DrawVehicleProfitButton(TimerGameEconomy::Date age, Money display_profit_last_year, uint num_vehicles, int x, int y)
 {
 	SpriteID spr;
 
@@ -314,7 +596,7 @@ static const uint MAX_REFIT_CYCLE = 256;
  * @param dest_cargo_type Destination cargo type.
  * @return the best sub type
  */
-byte GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoID dest_cargo_type)
+uint8_t GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoType dest_cargo_type)
 {
 	v_from = v_from->GetFirstEnginePart();
 	v_for = v_for->GetFirstEnginePart();
@@ -324,21 +606,21 @@ byte GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoID dest_cargo_t
 	subtypes.clear();
 	for (; v_from != nullptr; v_from = v_from->HasArticulatedPart() ? v_from->GetNextArticulatedPart() : nullptr) {
 		const Engine *e_from = v_from->GetEngine();
-		if (!e_from->CanCarryCargo() || !HasBit(e_from->info.callback_mask, CBM_VEHICLE_CARGO_SUFFIX)) continue;
+		if (!e_from->CanCarryCargo() || !e_from->info.callback_mask.Test(VehicleCallbackMask::CargoSuffix)) continue;
 		include(subtypes, GetCargoSubtypeText(v_from));
 	}
 
-	byte ret_refit_cyc = 0;
+	uint8_t ret_refit_cyc = 0;
 	bool success = false;
-	if (subtypes.size() > 0) {
+	if (!subtypes.empty()) {
 		/* Check whether any articulated part is refittable to 'dest_cargo_type' with a subtype listed in 'subtypes' */
 		for (Vehicle *v = v_for; v != nullptr; v = v->HasArticulatedPart() ? v->GetNextArticulatedPart() : nullptr) {
 			const Engine *e = v->GetEngine();
-			if (!e->CanCarryCargo() || !HasBit(e->info.callback_mask, CBM_VEHICLE_CARGO_SUFFIX)) continue;
+			if (!e->CanCarryCargo() || !e->info.callback_mask.Test(VehicleCallbackMask::CargoSuffix)) continue;
 			if (!HasBit(e->info.refit_mask, dest_cargo_type) && v->cargo_type != dest_cargo_type) continue;
 
-			CargoID old_cargo_type = v->cargo_type;
-			byte old_cargo_subtype = v->cargo_subtype;
+			CargoType old_cargo_type = v->cargo_type;
+			uint8_t old_cargo_subtype = v->cargo_subtype;
 
 			/* Set the 'destination' cargo */
 			v->cargo_type = dest_cargo_type;
@@ -354,7 +636,7 @@ byte GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoID dest_cargo_t
 				StringID subtype = GetCargoSubtypeText(v);
 				if (subtype == STR_EMPTY) break;
 
-				if (std::find(subtypes.begin(), subtypes.end(), subtype) == subtypes.end()) continue;
+				if (std::ranges::find(subtypes, subtype) == subtypes.end()) continue;
 
 				/* We found something matching. */
 				ret_refit_cyc = refit_cyc;
@@ -379,8 +661,8 @@ byte GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoID dest_cargo_t
 
 /** Option to refit a vehicle chain */
 struct RefitOption {
-	CargoID cargo;    ///< Cargo to refit to
-	byte subtype;     ///< Subcargo to use
+	CargoType cargo;    ///< Cargo to refit to
+	uint8_t subtype;     ///< Subcargo to use
 	StringID string;  ///< GRF-local String to display for the cargo
 
 	/**
@@ -404,41 +686,41 @@ struct RefitOption {
 	}
 };
 
-typedef std::vector<RefitOption> SubtypeList; ///< List of refit subtypes associated to a cargo.
+using RefitOptions = std::map<CargoType, std::vector<RefitOption>, CargoTypeComparator>; ///< Available refit options (subtype and string) associated with each cargo type.
 
 /**
  * Draw the list of available refit options for a consist and highlight the selected refit option (if any).
- * @param list  List of subtype options for each (sorted) cargo.
- * @param sel   Selected refit cargo-type in the window
+ * @param refits Available refit options for each (sorted) cargo.
+ * @param sel   Selected refit option in the window
  * @param pos   Position of the selected item in caller widow
  * @param rows  Number of rows(capacity) in caller window
  * @param delta Step height in caller window
  * @param r     Rectangle of the matrix widget.
  */
-static void DrawVehicleRefitWindow(const SubtypeList list[NUM_CARGO], const int sel[2], uint pos, uint rows, uint delta, const Rect &r)
+static void DrawVehicleRefitWindow(const RefitOptions &refits, const RefitOption *sel, uint pos, uint rows, uint delta, const Rect &r)
 {
-	uint y = r.top + WD_MATRIX_TOP;
+	Rect ir = r.Shrink(WidgetDimensions::scaled.matrix);
 	uint current = 0;
 
 	bool rtl = _current_text_dir == TD_RTL;
 	uint iconwidth = std::max(GetSpriteSize(SPR_CIRCLE_FOLDED).width, GetSpriteSize(SPR_CIRCLE_UNFOLDED).width);
 	uint iconheight = GetSpriteSize(SPR_CIRCLE_FOLDED).height;
-	int linecolour = _colour_gradient[COLOUR_ORANGE][4];
+	int linecolour = GetColourGradient(COLOUR_ORANGE, SHADE_NORMAL);
 
-	int iconleft   = rtl ? r.right - WD_MATRIX_RIGHT - iconwidth     : r.left + WD_MATRIX_LEFT;
-	int iconcenter = rtl ? r.right - WD_MATRIX_RIGHT - iconwidth / 2 : r.left + WD_MATRIX_LEFT + iconwidth / 2;
-	int iconinner  = rtl ? r.right - WD_MATRIX_RIGHT - iconwidth     : r.left + WD_MATRIX_LEFT + iconwidth;
+	int iconleft   = rtl ? ir.right - iconwidth     : ir.left;
+	int iconcenter = rtl ? ir.right - iconwidth / 2 : ir.left + iconwidth / 2;
+	int iconinner  = rtl ? ir.right - iconwidth     : ir.left + iconwidth;
 
-	int textleft   = r.left  + WD_MATRIX_LEFT  + (rtl ? 0 : iconwidth + 4);
-	int textright  = r.right - WD_MATRIX_RIGHT - (rtl ? iconwidth + 4 : 0);
+	Rect tr = ir.Indent(iconwidth + WidgetDimensions::scaled.hsep_wide, rtl);
 
 	/* Draw the list of subtypes for each cargo, and find the selected refit option (by its position). */
-	for (uint i = 0; current < pos + rows && i < NUM_CARGO; i++) {
-		for (uint j = 0; current < pos + rows && j < list[i].size(); j++) {
-			const RefitOption &refit = list[i][j];
+	for (const auto &pair : refits) {
+		bool has_subtypes = pair.second.size() > 1;
+		for (const RefitOption &refit : pair.second) {
+			if (current >= pos + rows) break;
 
-			/* Hide subtypes if sel[0] does not match */
-			if (sel[0] != (int)i && refit.subtype != 0xFF) continue;
+			/* Hide subtypes if selected cargo type does not match */
+			if ((sel == nullptr || sel->cargo != refit.cargo) && refit.subtype != UINT8_MAX) continue;
 
 			/* Refit options with a position smaller than pos don't have to be drawn. */
 			if (current < pos) {
@@ -446,25 +728,25 @@ static void DrawVehicleRefitWindow(const SubtypeList list[NUM_CARGO], const int 
 				continue;
 			}
 
-			if (list[i].size() > 1) {
-				if (refit.subtype != 0xFF) {
+			if (has_subtypes) {
+				if (refit.subtype != UINT8_MAX) {
 					/* Draw tree lines */
-					int ycenter = y + FONT_HEIGHT_NORMAL / 2;
-					GfxDrawLine(iconcenter, y - WD_MATRIX_TOP, iconcenter, j == list[i].size() - 1 ? ycenter : y - WD_MATRIX_TOP + delta - 1, linecolour);
+					int ycenter = tr.top + GetCharacterHeight(FS_NORMAL) / 2;
+					GfxDrawLine(iconcenter, tr.top - WidgetDimensions::scaled.matrix.top, iconcenter, (&refit == &pair.second.back()) ? ycenter : tr.top - WidgetDimensions::scaled.matrix.top + delta - 1, linecolour);
 					GfxDrawLine(iconcenter, ycenter, iconinner, ycenter, linecolour);
 				} else {
 					/* Draw expand/collapse icon */
-					DrawSprite(sel[0] == (int)i ? SPR_CIRCLE_UNFOLDED : SPR_CIRCLE_FOLDED, PAL_NONE, iconleft, y + (FONT_HEIGHT_NORMAL - iconheight) / 2);
+					DrawSprite((sel != nullptr && sel->cargo == refit.cargo) ? SPR_CIRCLE_UNFOLDED : SPR_CIRCLE_FOLDED, PAL_NONE, iconleft, tr.top + (GetCharacterHeight(FS_NORMAL) - iconheight) / 2);
 				}
 			}
 
-			TextColour colour = (sel[0] == (int)i && (uint)sel[1] == j) ? TC_WHITE : TC_BLACK;
+			TextColour colour = (sel != nullptr && sel->cargo == refit.cargo && sel->subtype == refit.subtype) ? TC_WHITE : TC_BLACK;
 			/* Get the cargo name. */
 			SetDParam(0, CargoSpec::Get(refit.cargo)->name);
 			SetDParam(1, refit.string);
-			DrawString(textleft, textright, y, STR_JUST_STRING_STRING, colour);
+			DrawString(tr, STR_JUST_STRING_STRING, colour);
 
-			y += delta;
+			tr.top += delta;
 			current++;
 		}
 	}
@@ -472,9 +754,8 @@ static void DrawVehicleRefitWindow(const SubtypeList list[NUM_CARGO], const int 
 
 /** Refit cargo window. */
 struct RefitWindow : public Window {
-	int sel[2];                  ///< Index in refit options, sel[0] == -1 if nothing is selected.
-	RefitOption *cargo;          ///< Refit option selected by #sel.
-	SubtypeList list[NUM_CARGO]; ///< List of refit subtypes available for each sorted cargo.
+	const RefitOption *selected_refit; ///< Selected refit option.
+	RefitOptions refit_list; ///< List of refit subtypes available for each sorted cargo.
 	VehicleOrderID order;        ///< If not #INVALID_VEH_ORDER_ID, selection is part of a refit order (rather than execute directly).
 	uint information_width;      ///< Width required for correctly displaying all cargoes in the information panel.
 	Scrollbar *vscroll;          ///< The main scrollbar.
@@ -485,7 +766,7 @@ struct RefitWindow : public Window {
 	uint vehicle_margin;         ///< Margin to use while selecting vehicles when the vehicle image is centered.
 	int click_x;                 ///< Position of the first click while dragging.
 	VehicleID selected_vehicle;  ///< First vehicle in the current selection.
-	uint8 num_vehicles;          ///< Number of selected vehicles.
+	uint8_t num_vehicles;          ///< Number of selected vehicles.
 	bool auto_refit;             ///< Select cargo for auto-refitting.
 
 	/**
@@ -493,7 +774,12 @@ struct RefitWindow : public Window {
 	 */
 	void BuildRefitList()
 	{
-		for (uint i = 0; i < NUM_CARGO; i++) this->list[i].clear();
+		/* Store the currently selected RefitOption. */
+		std::optional<RefitOption> current_refit_option;
+		if (this->selected_refit != nullptr) current_refit_option = *(this->selected_refit);
+		this->selected_refit = nullptr;
+
+		this->refit_list.clear();
 		Vehicle *v = Vehicle::Get(this->window_number);
 
 		/* Check only the selected vehicles. */
@@ -501,43 +787,40 @@ struct RefitWindow : public Window {
 		GetVehicleSet(vehicles_to_refit, Vehicle::Get(this->selected_vehicle), this->num_vehicles);
 
 		do {
-			if (v->type == VEH_TRAIN && std::find(vehicles_to_refit.begin(), vehicles_to_refit.end(), v->index) == vehicles_to_refit.end()) continue;
+			if (v->type == VEH_TRAIN && std::ranges::find(vehicles_to_refit, v->index) == vehicles_to_refit.end()) continue;
 			const Engine *e = v->GetEngine();
 			CargoTypes cmask = e->info.refit_mask;
-			byte callback_mask = e->info.callback_mask;
+			VehicleCallbackMasks callback_mask = e->info.callback_mask;
 
 			/* Skip this engine if it does not carry anything */
 			if (!e->CanCarryCargo()) continue;
 			/* Skip this engine if we build the list for auto-refitting and engine doesn't allow it. */
-			if (this->auto_refit && !HasBit(e->info.misc_flags, EF_AUTO_REFIT)) continue;
+			if (this->auto_refit && !e->info.misc_flags.Test(EngineMiscFlag::AutoRefit)) continue;
 
 			/* Loop through all cargoes in the refit mask */
-			int current_index = 0;
 			for (const auto &cs : _sorted_cargo_specs) {
-				CargoID cid = cs->Index();
+				CargoType cargo_type = cs->Index();
 				/* Skip cargo type if it's not listed */
-				if (!HasBit(cmask, cid)) {
-					current_index++;
-					continue;
-				}
+				if (!HasBit(cmask, cargo_type)) continue;
 
-				bool first_vehicle = this->list[current_index].size() == 0;
+				auto &list = this->refit_list[cargo_type];
+				bool first_vehicle = list.empty();
 				if (first_vehicle) {
 					/* Keeping the current subtype is always an option. It also serves as the option in case of no subtypes */
-					this->list[current_index].push_back({cid, 0xFF, STR_EMPTY});
+					list.push_back({cargo_type, UINT8_MAX, STR_EMPTY});
 				}
 
 				/* Check the vehicle's callback mask for cargo suffixes.
 				 * This is not supported for ordered refits, since subtypes only have a meaning
 				 * for a specific vehicle at a specific point in time, which conflicts with shared orders,
 				 * autoreplace, autorenew, clone, order restoration, ... */
-				if (this->order == INVALID_VEH_ORDER_ID && HasBit(callback_mask, CBM_VEHICLE_CARGO_SUFFIX)) {
+				if (this->order == INVALID_VEH_ORDER_ID && callback_mask.Test(VehicleCallbackMask::CargoSuffix)) {
 					/* Make a note of the original cargo type. It has to be
 					 * changed to test the cargo & subtype... */
-					CargoID temp_cargo = v->cargo_type;
-					byte temp_subtype  = v->cargo_subtype;
+					CargoType temp_cargo = v->cargo_type;
+					uint8_t temp_subtype  = v->cargo_subtype;
 
-					v->cargo_type = cid;
+					v->cargo_type = cargo_type;
 
 					for (uint refit_cyc = 0; refit_cyc < MAX_REFIT_CYCLE; refit_cyc++) {
 						v->cargo_subtype = refit_cyc;
@@ -553,19 +836,18 @@ struct RefitWindow : public Window {
 							if (subtype == STR_EMPTY) break;
 
 							RefitOption option;
-							option.cargo   = cid;
+							option.cargo   = cargo_type;
 							option.subtype = refit_cyc;
 							option.string  = subtype;
-							include(this->list[current_index], option);
+							include(list, option);
 						} else {
 							/* Intersect the subtypes of earlier vehicles with the subtypes of this vehicle */
 							if (subtype == STR_EMPTY) {
 								/* No more subtypes for this vehicle, delete all subtypes >= refit_cyc */
-								SubtypeList &l = this->list[current_index];
-								/* 0xFF item is in front, other subtypes are sorted. So just truncate the list in the right spot */
-								for (uint i = 1; i < l.size(); i++) {
-									if (l[i].subtype >= refit_cyc) {
-										l.resize(i);
+								/* UINT8_MAX item is in front, other subtypes are sorted. So just truncate the list in the right spot */
+								for (uint i = 1; i < list.size(); i++) {
+									if (list[i].subtype >= refit_cyc) {
+										list.resize(i);
 										break;
 									}
 								}
@@ -573,11 +855,10 @@ struct RefitWindow : public Window {
 							} else {
 								/* Check whether the subtype matches with the subtype of earlier vehicles. */
 								uint pos = 1;
-								SubtypeList &l = this->list[current_index];
-								while (pos < l.size() && l[pos].subtype != refit_cyc) pos++;
-								if (pos < l.size() && l[pos].string != subtype) {
+								while (pos < list.size() && list[pos].subtype != refit_cyc) pos++;
+								if (pos < list.size() && list[pos].string != subtype) {
 									/* String mismatch, remove item keeping the order */
-									l.erase(l.begin() + pos);
+									list.erase(list.begin() + pos);
 								}
 							}
 						}
@@ -591,9 +872,23 @@ struct RefitWindow : public Window {
 					v->First()->InvalidateNewGRFCache();
 					v->InvalidateNewGRFCache();
 				}
-				current_index++;
 			}
 		} while (v->IsGroundVehicle() && (v = v->Next()) != nullptr);
+
+		/* Restore the previously selected RefitOption. */
+		if (current_refit_option.has_value()) {
+			for (const auto &pair : this->refit_list) {
+				for (const auto &refit : pair.second) {
+					if (refit.cargo == current_refit_option->cargo && refit.subtype == current_refit_option->subtype) {
+						this->selected_refit = &refit;
+						break;
+					}
+				}
+				if (this->selected_refit != nullptr) break;
+			}
+		}
+
+		this->SetWidgetDisabledState(WID_VR_REFIT, this->selected_refit == nullptr);
 	}
 
 	/**
@@ -601,24 +896,22 @@ struct RefitWindow : public Window {
 	 */
 	void RefreshScrollbar()
 	{
-		uint scroll_row = 0;
-		uint row = 0;
+		size_t scroll_row = 0;
+		size_t rows = 0;
+		CargoType cargo = this->selected_refit == nullptr ? INVALID_CARGO : this->selected_refit->cargo;
 
-		for (uint i = 0; i < NUM_CARGO; i++) {
-			for (uint j = 0; j < this->list[i].size(); j++) {
-				const RefitOption &refit = this->list[i][j];
-
-				/* Hide subtypes if sel[0] does not match */
-				if (this->sel[0] != (int)i && refit.subtype != 0xFF) continue;
-
-				if (this->sel[0] == (int)i && (uint)this->sel[1] == j) scroll_row = row;
-
-				row++;
+		for (const auto &pair : this->refit_list) {
+			if (pair.first == cargo) {
+				/* selected_refit points to an element in the vector so no need to search for it. */
+				scroll_row = rows + (this->selected_refit - pair.second.data());
+				rows += pair.second.size();
+			} else {
+				rows++; /* Unselected cargo type is collapsed into one row. */
 			}
 		}
 
-		this->vscroll->SetCount(row);
-		if (scroll_row < row) this->vscroll->ScrollTowards(scroll_row);
+		this->vscroll->SetCount(rows);
+		this->vscroll->ScrollTowards(static_cast<int>(scroll_row));
 	}
 
 	/**
@@ -629,93 +922,47 @@ struct RefitWindow : public Window {
 	{
 		uint row = 0;
 
-		for (uint i = 0; i < NUM_CARGO; i++) {
-			for (uint j = 0; j < this->list[i].size(); j++) {
-				const RefitOption &refit = this->list[i][j];
-
-				/* Hide subtypes if sel[0] does not match */
-				if (this->sel[0] != (int)i && refit.subtype != 0xFF) continue;
-
+		for (const auto &pair : refit_list) {
+			for (const RefitOption &refit : pair.second) {
 				if (row == click_row) {
-					this->sel[0] = i;
-					this->sel[1] = j;
+					this->selected_refit = &refit;
 					return;
 				}
-
 				row++;
+				/* If this cargo type is not already selected then its subtypes are not visible, so skip the rest. */
+				if (this->selected_refit == nullptr || this->selected_refit->cargo != refit.cargo) break;
 			}
 		}
 
-		this->sel[0] = -1;
-		this->sel[1] = 0;
+		/* No selection made */
+		this->selected_refit = nullptr;
 	}
 
-	/**
-	 * Gets the #RefitOption placed in the selected index.
-	 * @return Pointer to the #RefitOption currently in use.
-	 */
-	RefitOption *GetRefitOption()
+	RefitWindow(WindowDesc &desc, const Vehicle *v, VehicleOrderID order, bool auto_refit) : Window(desc)
 	{
-		if (this->sel[0] < 0) return nullptr;
-
-		SubtypeList &l = this->list[this->sel[0]];
-		if ((uint)this->sel[1] >= l.size()) return nullptr;
-
-		return &l[this->sel[1]];
-	}
-
-	RefitWindow(WindowDesc *desc, const Vehicle *v, VehicleOrderID order, bool auto_refit) : Window(desc)
-	{
-		this->sel[0] = -1;
-		this->sel[1] = 0;
 		this->auto_refit = auto_refit;
 		this->order = order;
 		this->CreateNestedTree();
 
 		this->vscroll = this->GetScrollbar(WID_VR_SCROLLBAR);
 		this->hscroll = (v->IsGroundVehicle() ? this->GetScrollbar(WID_VR_HSCROLLBAR) : nullptr);
-		this->GetWidget<NWidgetCore>(WID_VR_SELECT_HEADER)->tool_tip = STR_REFIT_TRAIN_LIST_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VR_MATRIX)->tool_tip        = STR_REFIT_TRAIN_LIST_TOOLTIP + v->type;
+		this->GetWidget<NWidgetCore>(WID_VR_SELECT_HEADER)->SetToolTip(STR_REFIT_TRAIN_LIST_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VR_MATRIX)->SetToolTip(STR_REFIT_TRAIN_LIST_TOOLTIP + v->type);
 		NWidgetCore *nwi = this->GetWidget<NWidgetCore>(WID_VR_REFIT);
-		nwi->widget_data = STR_REFIT_TRAIN_REFIT_BUTTON + v->type;
-		nwi->tool_tip    = STR_REFIT_TRAIN_REFIT_TOOLTIP + v->type;
+		nwi->SetStringTip(STR_REFIT_TRAIN_REFIT_BUTTON + v->type, STR_REFIT_TRAIN_REFIT_TOOLTIP + v->type);
 		this->GetWidget<NWidgetStacked>(WID_VR_SHOW_HSCROLLBAR)->SetDisplayedPlane(v->IsGroundVehicle() ? 0 : SZSP_HORIZONTAL);
-		this->GetWidget<NWidgetCore>(WID_VR_VEHICLE_PANEL_DISPLAY)->tool_tip = (v->type == VEH_TRAIN) ? STR_REFIT_SELECT_VEHICLES_TOOLTIP : STR_NULL;
+		this->GetWidget<NWidgetCore>(WID_VR_VEHICLE_PANEL_DISPLAY)->SetToolTip((v->type == VEH_TRAIN) ? STR_REFIT_SELECT_VEHICLES_TOOLTIP : STR_NULL);
 
 		this->FinishInitNested(v->index);
 		this->owner = v->owner;
 
-		this->SetWidgetDisabledState(WID_VR_REFIT, this->sel[0] < 0);
+		this->SetWidgetDisabledState(WID_VR_REFIT, this->selected_refit == nullptr);
 	}
 
 	void OnInit() override
 	{
-		if (this->cargo != nullptr) {
-			/* Store the RefitOption currently in use. */
-			RefitOption current_refit_option = *(this->cargo);
-
-			/* Rebuild the refit list */
-			this->BuildRefitList();
-			this->sel[0] = -1;
-			this->sel[1] = 0;
-			this->cargo = nullptr;
-			for (uint i = 0; this->cargo == nullptr && i < NUM_CARGO; i++) {
-				for (uint j = 0; j < list[i].size(); j++) {
-					if (list[i][j] == current_refit_option) {
-						this->sel[0] = i;
-						this->sel[1] = j;
-						this->cargo = &list[i][j];
-						break;
-					}
-				}
-			}
-
-			this->SetWidgetDisabledState(WID_VR_REFIT, this->sel[0] < 0);
-			this->RefreshScrollbar();
-		} else {
-			/* Rebuild the refit list */
-			this->OnInvalidateData(VIWD_CONSIST_CHANGED);
-		}
+		/* (Re)build the refit list */
+		this->OnInvalidateData(VIWD_CONSIST_CHANGED);
 	}
 
 	void OnPaint() override
@@ -739,25 +986,25 @@ struct RefitWindow : public Window {
 		this->DrawWidgets();
 	}
 
-	void UpdateWidgetSize(int widget, Dimension *size, const Dimension &padding, Dimension *fill, Dimension *resize) override
+	void UpdateWidgetSize(WidgetID widget, Dimension &size, [[maybe_unused]] const Dimension &padding, [[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		switch (widget) {
 			case WID_VR_MATRIX:
-				resize->height = WD_MATRIX_TOP + FONT_HEIGHT_NORMAL + WD_MATRIX_BOTTOM;
-				size->height = resize->height * 8;
+				resize.height = GetCharacterHeight(FS_NORMAL) + padding.height;
+				size.height = resize.height * 8;
 				break;
 
 			case WID_VR_VEHICLE_PANEL_DISPLAY:
-				size->height = ScaleGUITrad(GetVehicleHeight(Vehicle::Get(this->window_number)->type));
+				size.height = ScaleGUITrad(GetVehicleHeight(Vehicle::Get(this->window_number)->type));
 				break;
 
 			case WID_VR_INFO:
-				size->width = WD_FRAMERECT_LEFT + this->information_width + WD_FRAMERECT_RIGHT;
+				size.width = this->information_width + padding.height;
 				break;
 		}
 	}
 
-	void SetStringParameters(int widget) const override
+	void SetStringParameters(WidgetID widget) const override
 	{
 		if (widget == WID_VR_CAPTION) SetDParam(0, Vehicle::Get(this->window_number)->index);
 	}
@@ -768,22 +1015,20 @@ struct RefitWindow : public Window {
 	 * @return INVALID_STRING_ID if there is no capacity. StringID to use in any other case.
 	 * @post String parameters have been set.
 	 */
-	StringID GetCapacityString(RefitOption *option) const
+	StringID GetCapacityString(const RefitOption &option) const
 	{
 		assert(_current_company == _local_company);
-		Vehicle *v = Vehicle::Get(this->window_number);
-		CommandCost cost = DoCommand(v->tile, this->selected_vehicle, option->cargo | option->subtype << 8 | this->num_vehicles << 16 |
-				(int)this->auto_refit << 24, DC_QUERY_COST, GetCmdRefitVeh(v->type));
+		auto [cost, refit_capacity, mail_capacity, cargo_capacities] = Command<CMD_REFIT_VEHICLE>::Do(DC_QUERY_COST, this->selected_vehicle, option.cargo, option.subtype, this->auto_refit, false, this->num_vehicles);
 
 		if (cost.Failed()) return INVALID_STRING_ID;
 
-		SetDParam(0, option->cargo);
-		SetDParam(1, _returned_refit_capacity);
+		SetDParam(0, option.cargo);
+		SetDParam(1, refit_capacity);
 
 		Money money = cost.GetCost();
-		if (_returned_mail_refit_capacity > 0) {
-			SetDParam(2, CT_MAIL);
-			SetDParam(3, _returned_mail_refit_capacity);
+		if (mail_capacity > 0) {
+			SetDParam(2, GetCargoTypeByLabel(CT_MAIL));
+			SetDParam(3, mail_capacity);
 			if (this->order != INVALID_VEH_ORDER_ID) {
 				/* No predictable cost */
 				return STR_PURCHASE_INFO_AIRCRAFT_CAPACITY;
@@ -809,13 +1054,13 @@ struct RefitWindow : public Window {
 		}
 	}
 
-	void DrawWidget(const Rect &r, int widget) const override
+	void DrawWidget(const Rect &r, WidgetID widget) const override
 	{
 		switch (widget) {
 			case WID_VR_VEHICLE_PANEL_DISPLAY: {
 				Vehicle *v = Vehicle::Get(this->window_number);
-				DrawVehicleImage(v, this->sprite_left + WD_FRAMERECT_LEFT, this->sprite_right - WD_FRAMERECT_RIGHT,
-					r.top + WD_FRAMERECT_TOP, INVALID_VEHICLE, EIT_IN_DETAILS, this->hscroll != nullptr ? this->hscroll->GetPosition() : 0);
+				DrawVehicleImage(v, {this->sprite_left, r.top, this->sprite_right, r.bottom},
+					INVALID_VEHICLE, EIT_IN_DETAILS, this->hscroll != nullptr ? this->hscroll->GetPosition() : 0);
 
 				/* Highlight selected vehicles. */
 				if (this->order != INVALID_VEH_ORDER_ID) break;
@@ -828,9 +1073,14 @@ struct RefitWindow : public Window {
 						int left = INT32_MIN;
 						int width = 0;
 
+						/* Determine top & bottom position of the highlight.*/
+						const int height = ScaleSpriteTrad(12);
+						const int highlight_top = CenterBounds(r.top, r.bottom, height);
+						const int highlight_bottom = highlight_top + height - 1;
+
 						for (Train *u = Train::From(v); u != nullptr; u = u->Next()) {
 							/* Start checking. */
-							const bool contained = std::find(vehicles_to_refit.begin(), vehicles_to_refit.end(), u->index) != vehicles_to_refit.end();
+							const bool contained = std::ranges::find(vehicles_to_refit, u->index) != vehicles_to_refit.end();
 							if (contained && left == INT32_MIN) {
 								left = x - this->hscroll->GetPosition() + r.left + this->vehicle_margin;
 								width = 0;
@@ -848,12 +1098,13 @@ struct RefitWindow : public Window {
 								left = std::max(0, left);
 
 								if (_current_text_dir == TD_RTL) {
-									right = this->GetWidget<NWidgetCore>(WID_VR_VEHICLE_PANEL_DISPLAY)->current_x - left;
+									right = r.Width() - left;
 									left = right - width;
 								}
 
 								if (left != right) {
-									DrawFrameRect(left, r.top + WD_FRAMERECT_TOP, right, r.top + WD_FRAMERECT_TOP + ScaleGUITrad(14) - 1, COLOUR_WHITE, FR_BORDERONLY);
+									Rect hr = {left, highlight_top, right, highlight_bottom};
+									DrawFrameRect(hr.Expand(WidgetDimensions::scaled.bevel), COLOUR_WHITE, FrameFlag::BorderOnly);
 								}
 
 								left = INT32_MIN;
@@ -872,15 +1123,14 @@ struct RefitWindow : public Window {
 			}
 
 			case WID_VR_MATRIX:
-				DrawVehicleRefitWindow(this->list, this->sel, this->vscroll->GetPosition(), this->vscroll->GetCapacity(), this->resize.step_height, r);
+				DrawVehicleRefitWindow(this->refit_list, this->selected_refit, this->vscroll->GetPosition(), this->vscroll->GetCapacity(), this->resize.step_height, r);
 				break;
 
 			case WID_VR_INFO:
-				if (this->cargo != nullptr) {
-					StringID string = this->GetCapacityString(this->cargo);
+				if (this->selected_refit != nullptr) {
+					StringID string = this->GetCapacityString(*this->selected_refit);
 					if (string != INVALID_STRING_ID) {
-						DrawStringMultiLine(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT,
-								r.top + WD_FRAMERECT_TOP, r.bottom - WD_FRAMERECT_BOTTOM, string);
+						DrawStringMultiLine(r.Shrink(WidgetDimensions::scaled.framerect), string);
 					}
 				}
 				break;
@@ -892,7 +1142,7 @@ struct RefitWindow : public Window {
 	 * @param data Information about the changed data.
 	 * @param gui_scope Whether the call is done from GUI scope. You may not do everything when not in GUI scope. See #InvalidateWindowData() for details.
 	 */
-	void OnInvalidateData(int data = 0, bool gui_scope = true) override
+	void OnInvalidateData([[maybe_unused]] int data = 0, [[maybe_unused]] bool gui_scope = true) override
 	{
 		switch (data) {
 			case VIWD_AUTOREPLACE: // Autoreplace replaced the vehicle; selected_vehicle became invalid.
@@ -901,7 +1151,7 @@ struct RefitWindow : public Window {
 				Vehicle *v = Vehicle::Get(this->window_number);
 				this->selected_vehicle = v->index;
 				this->num_vehicles = UINT8_MAX;
-				FALLTHROUGH;
+				[[fallthrough]];
 			}
 
 			case 2: { // The vehicle selection has changed; rebuild the entire list.
@@ -913,9 +1163,9 @@ struct RefitWindow : public Window {
 				uint max_width = 0;
 
 				/* Check the width of all cargo information strings. */
-				for (uint i = 0; i < NUM_CARGO; i++) {
-					for (uint j = 0; j < this->list[i].size(); j++) {
-						StringID string = this->GetCapacityString(&list[i][j]);
+				for (const auto &list : this->refit_list) {
+					for (const RefitOption &refit : list.second) {
+						StringID string = this->GetCapacityString(refit);
 						if (string != INVALID_STRING_ID) {
 							Dimension dim = GetStringBoundingBox(string);
 							max_width = std::max(dim.width, max_width);
@@ -927,12 +1177,11 @@ struct RefitWindow : public Window {
 					this->information_width = max_width;
 					this->ReInit();
 				}
-				FALLTHROUGH;
+				[[fallthrough]];
 			}
 
 			case 1: // A new cargo has been selected.
 				if (!gui_scope) break;
-				this->cargo = GetRefitOption();
 				this->RefreshScrollbar();
 				break;
 		}
@@ -989,7 +1238,7 @@ struct RefitWindow : public Window {
 					if (_ctrl_pressed) this->num_vehicles = UINT8_MAX;
 					break;
 				}
-				FALLTHROUGH;
+				[[fallthrough]];
 			}
 
 			default:
@@ -1000,7 +1249,7 @@ struct RefitWindow : public Window {
 		}
 	}
 
-	void OnClick(Point pt, int widget, int click_count) override
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
 	{
 		switch (widget) {
 			case WID_VR_VEHICLE_PANEL_DISPLAY: { // Vehicle image.
@@ -1020,29 +1269,29 @@ struct RefitWindow : public Window {
 
 			case WID_VR_MATRIX: { // listbox
 				this->SetSelection(this->vscroll->GetScrolledRowFromWidget(pt.y, this, WID_VR_MATRIX));
-				this->SetWidgetDisabledState(WID_VR_REFIT, this->sel[0] < 0);
+				this->SetWidgetDisabledState(WID_VR_REFIT, this->selected_refit == nullptr);
 				this->InvalidateData(1);
 
 				if (click_count == 1) break;
-				FALLTHROUGH;
+				[[fallthrough]];
 			}
 
 			case WID_VR_REFIT: // refit button
-				if (this->cargo != nullptr) {
+				if (this->selected_refit != nullptr) {
 					const Vehicle *v = Vehicle::Get(this->window_number);
 
 					if (this->order == INVALID_VEH_ORDER_ID) {
 						bool delete_window = this->selected_vehicle == v->index && this->num_vehicles == UINT8_MAX;
-						if (DoCommandP(v->tile, this->selected_vehicle, this->cargo->cargo | this->cargo->subtype << 8 | this->num_vehicles << 16, GetCmdRefitVeh(v)) && delete_window) this->Close();
+						if (Command<CMD_REFIT_VEHICLE>::Post(GetCmdRefitVehMsg(v), v->tile, this->selected_vehicle, this->selected_refit->cargo, this->selected_refit->subtype, false, false, this->num_vehicles) && delete_window) this->Close();
 					} else {
-						if (DoCommandP(v->tile, v->index, this->cargo->cargo | this->order << 16, CMD_ORDER_REFIT)) this->Close();
+						if (Command<CMD_ORDER_REFIT>::Post(v->tile, v->index, this->order, this->selected_refit->cargo)) this->Close();
 					}
 				}
 				break;
 		}
 	}
 
-	void OnMouseDrag(Point pt, int widget) override
+	void OnMouseDrag(Point pt, WidgetID widget) override
 	{
 		switch (widget) {
 			case WID_VR_VEHICLE_PANEL_DISPLAY: { // Vehicle image.
@@ -1055,7 +1304,7 @@ struct RefitWindow : public Window {
 		}
 	}
 
-	void OnDragDrop(Point pt, int widget) override
+	void OnDragDrop(Point pt, WidgetID widget) override
 	{
 		switch (widget) {
 			case WID_VR_VEHICLE_PANEL_DISPLAY: { // Vehicle image.
@@ -1076,10 +1325,10 @@ struct RefitWindow : public Window {
 	}
 };
 
-static const NWidgetPart _nested_vehicle_refit_widgets[] = {
+static constexpr NWidgetPart _nested_vehicle_refit_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
-		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VR_CAPTION), SetDataTip(STR_REFIT_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VR_CAPTION), SetStringTip(STR_REFIT_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
 		NWidget(WWT_DEFSIZEBOX, COLOUR_GREY),
 	EndContainer(),
 	/* Vehicle display + scrollbar. */
@@ -1089,13 +1338,13 @@ static const NWidgetPart _nested_vehicle_refit_widgets[] = {
 			NWidget(NWID_HSCROLLBAR, COLOUR_GREY, WID_VR_HSCROLLBAR),
 		EndContainer(),
 	EndContainer(),
-	NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_VR_SELECT_HEADER), SetDataTip(STR_REFIT_TITLE, STR_NULL), SetResize(1, 0),
+	NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_VR_SELECT_HEADER), SetStringTip(STR_REFIT_TITLE), SetResize(1, 0),
 	/* Matrix + scrollbar. */
 	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_MATRIX, COLOUR_GREY, WID_VR_MATRIX), SetMinimalSize(228, 112), SetResize(1, 14), SetFill(1, 1), SetMatrixDataTip(1, 0, STR_NULL), SetScrollbar(WID_VR_SCROLLBAR),
+		NWidget(WWT_MATRIX, COLOUR_GREY, WID_VR_MATRIX), SetMinimalSize(228, 112), SetResize(1, 14), SetFill(1, 1), SetMatrixDataTip(1, 0), SetScrollbar(WID_VR_SCROLLBAR),
 		NWidget(NWID_VSCROLLBAR, COLOUR_GREY, WID_VR_SCROLLBAR),
 	EndContainer(),
-	NWidget(WWT_PANEL, COLOUR_GREY, WID_VR_INFO), SetMinimalTextLines(2, WD_FRAMERECT_TOP + WD_FRAMERECT_BOTTOM), SetResize(1, 0), EndContainer(),
+	NWidget(WWT_PANEL, COLOUR_GREY, WID_VR_INFO), SetMinimalTextLines(2, WidgetDimensions::unscaled.framerect.Vertical()), SetResize(1, 0), EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VR_REFIT), SetFill(1, 0), SetResize(1, 0),
 		NWidget(WWT_RESIZEBOX, COLOUR_GREY),
@@ -1105,8 +1354,8 @@ static const NWidgetPart _nested_vehicle_refit_widgets[] = {
 static WindowDesc _vehicle_refit_desc(
 	WDP_AUTO, "view_vehicle_refit", 240, 174,
 	WC_VEHICLE_REFIT, WC_VEHICLE_VIEW,
-	WDF_CONSTRUCTION,
-	_nested_vehicle_refit_widgets, lengthof(_nested_vehicle_refit_widgets)
+	WindowDefaultFlag::Construction,
+	_nested_vehicle_refit_widgets
 );
 
 /**
@@ -1119,7 +1368,7 @@ static WindowDesc _vehicle_refit_desc(
 void ShowVehicleRefitWindow(const Vehicle *v, VehicleOrderID order, Window *parent, bool auto_refit)
 {
 	CloseWindowById(WC_VEHICLE_REFIT, v->index);
-	RefitWindow *w = new RefitWindow(&_vehicle_refit_desc, v, order, auto_refit);
+	RefitWindow *w = new RefitWindow(_vehicle_refit_desc, v, order, auto_refit);
 	w->parent = parent;
 }
 
@@ -1155,14 +1404,14 @@ uint ShowRefitOptionsList(int left, int right, int y, EngineID engine)
 /** Get the cargo subtype text from NewGRF for the vehicle details window. */
 StringID GetCargoSubtypeText(const Vehicle *v)
 {
-	if (HasBit(EngInfo(v->engine_type)->callback_mask, CBM_VEHICLE_CARGO_SUFFIX)) {
-		uint16 cb = GetVehicleCallback(CBID_VEHICLE_CARGO_SUFFIX, 0, 0, v->engine_type, v);
+	if (EngInfo(v->engine_type)->callback_mask.Test(VehicleCallbackMask::CargoSuffix)) {
+		uint16_t cb = GetVehicleCallback(CBID_VEHICLE_CARGO_SUFFIX, 0, 0, v->engine_type, v);
 		if (cb != CALLBACK_FAILED) {
 			if (cb > 0x400) ErrorUnknownCallbackResult(v->GetGRFID(), CBID_VEHICLE_CARGO_SUFFIX, cb);
 			if (cb >= 0x400 || (v->GetGRF()->grf_version < 8 && cb == 0xFF)) cb = CALLBACK_FAILED;
 		}
 		if (cb != CALLBACK_FAILED) {
-			return GetGRFStringID(v->GetGRFID(), 0xD000 + cb);
+			return GetGRFStringID(v->GetGRFID(), GRFSTR_MISC_GRF_TEXT + cb);
 		}
 	}
 	return STR_EMPTY;
@@ -1207,42 +1456,42 @@ static bool VehicleNumberSorter(const Vehicle * const &a, const Vehicle * const 
 /** Sort vehicles by their name */
 static bool VehicleNameSorter(const Vehicle * const &a, const Vehicle * const &b)
 {
-	static char last_name[2][64];
+	static std::string last_name[2] = { {}, {} };
 
 	if (a != _last_vehicle[0]) {
 		_last_vehicle[0] = a;
 		SetDParam(0, a->index);
-		GetString(last_name[0], STR_VEHICLE_NAME, lastof(last_name[0]));
+		last_name[0] = GetString(STR_VEHICLE_NAME);
 	}
 
 	if (b != _last_vehicle[1]) {
 		_last_vehicle[1] = b;
 		SetDParam(0, b->index);
-		GetString(last_name[1], STR_VEHICLE_NAME, lastof(last_name[1]));
+		last_name[1] = GetString(STR_VEHICLE_NAME);
 	}
 
-	int r = strnatcmp(last_name[0], last_name[1]); // Sort by name (natural sorting).
+	int r = StrNaturalCompare(last_name[0], last_name[1]); // Sort by name (natural sorting).
 	return (r != 0) ? r < 0: VehicleNumberSorter(a, b);
 }
 
 /** Sort vehicles by their age */
 static bool VehicleAgeSorter(const Vehicle * const &a, const Vehicle * const &b)
 {
-	int r = a->age - b->age;
+	auto r = a->age - b->age;
 	return (r != 0) ? r < 0 : VehicleNumberSorter(a, b);
 }
 
 /** Sort vehicles by this year profit */
 static bool VehicleProfitThisYearSorter(const Vehicle * const &a, const Vehicle * const &b)
 {
-	int r = ClampToI32(a->GetDisplayProfitThisYear() - b->GetDisplayProfitThisYear());
+	int r = ClampTo<int32_t>(a->GetDisplayProfitThisYear() - b->GetDisplayProfitThisYear());
 	return (r != 0) ? r < 0 : VehicleNumberSorter(a, b);
 }
 
 /** Sort vehicles by last year profit */
 static bool VehicleProfitLastYearSorter(const Vehicle * const &a, const Vehicle * const &b)
 {
-	int r = ClampToI32(a->GetDisplayProfitLastYear() - b->GetDisplayProfitLastYear());
+	int r = ClampTo<int32_t>(a->GetDisplayProfitLastYear() - b->GetDisplayProfitLastYear());
 	return (r != 0) ? r < 0 : VehicleNumberSorter(a, b);
 }
 
@@ -1250,15 +1499,15 @@ static bool VehicleProfitLastYearSorter(const Vehicle * const &a, const Vehicle 
 static bool VehicleCargoSorter(const Vehicle * const &a, const Vehicle * const &b)
 {
 	const Vehicle *v;
-	CargoArray diff;
+	CargoArray diff{};
 
 	/* Append the cargo of the connected waggons */
 	for (v = a; v != nullptr; v = v->Next()) diff[v->cargo_type] += v->cargo_cap;
 	for (v = b; v != nullptr; v = v->Next()) diff[v->cargo_type] -= v->cargo_cap;
 
 	int r = 0;
-	for (CargoID i = 0; i < NUM_CARGO; i++) {
-		r = diff[i];
+	for (uint d : diff) {
+		r = d;
 		if (r != 0) break;
 	}
 
@@ -1295,7 +1544,7 @@ static bool VehicleValueSorter(const Vehicle * const &a, const Vehicle * const &
 	for (u = a; u != nullptr; u = u->Next()) diff += u->value;
 	for (u = b; u != nullptr; u = u->Next()) diff -= u->value;
 
-	int r = ClampToI32(diff);
+	int r = ClampTo<int32_t>(diff);
 	return (r != 0) ? r < 0 : VehicleNumberSorter(a, b);
 }
 
@@ -1309,7 +1558,7 @@ static bool VehicleLengthSorter(const Vehicle * const &a, const Vehicle * const 
 /** Sort vehicles by the time they can still live */
 static bool VehicleTimeToLiveSorter(const Vehicle * const &a, const Vehicle * const &b)
 {
-	int r = ClampToI32((a->max_age - a->age) - (b->max_age - b->age));
+	int r = ClampTo<int32_t>((a->max_age - a->age) - (b->max_age - b->age));
 	return (r != 0) ? r < 0 : VehicleNumberSorter(a, b);
 }
 
@@ -1364,29 +1613,43 @@ void ChangeVehicleViewWindow(VehicleID from_index, VehicleID to_index)
 	ChangeVehicleWindow(WC_VEHICLE_TIMETABLE, from_index, to_index);
 }
 
-static const NWidgetPart _nested_vehicle_list[] = {
+static constexpr NWidgetPart _nested_vehicle_list[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
-		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VL_CAPTION),
+		NWidget(NWID_SELECTION, INVALID_COLOUR, WID_VL_CAPTION_SELECTION),
+			NWidget(WWT_CAPTION, COLOUR_GREY, WID_VL_CAPTION),
+			NWidget(NWID_HORIZONTAL),
+				NWidget(WWT_CAPTION, COLOUR_GREY, WID_VL_CAPTION_SHARED_ORDERS),
+				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VL_ORDER_VIEW), SetMinimalSize(61, 14), SetStringTip(STR_GOTO_ORDER_VIEW, STR_GOTO_ORDER_VIEW_TOOLTIP),
+			EndContainer(),
+		EndContainer(),
 		NWidget(WWT_SHADEBOX, COLOUR_GREY),
 		NWidget(WWT_DEFSIZEBOX, COLOUR_GREY),
 		NWidget(WWT_STICKYBOX, COLOUR_GREY),
 	EndContainer(),
 
 	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_VL_GROUP_ORDER), SetMinimalSize(81, 12), SetFill(0, 1), SetDataTip(STR_STATION_VIEW_GROUP, STR_TOOLTIP_GROUP_ORDER),
-		NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VL_GROUP_BY_PULLDOWN), SetMinimalSize(167, 12), SetFill(0, 1), SetDataTip(0x0, STR_TOOLTIP_GROUP_ORDER),
-		NWidget(WWT_PANEL, COLOUR_GREY), SetMinimalSize(12, 12), SetFill(1, 1), SetResize(1, 0), EndContainer(),
+		NWidget(NWID_VERTICAL, NC_EQUALSIZE),
+			NWidget(WWT_TEXTBTN, COLOUR_GREY, WID_VL_GROUP_ORDER), SetMinimalSize(0, 12), SetFill(1, 1), SetStringTip(STR_STATION_VIEW_GROUP, STR_TOOLTIP_GROUP_ORDER),
+			NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VL_SORT_ORDER), SetMinimalSize(0, 12), SetFill(1, 1), SetStringTip(STR_BUTTON_SORT_BY, STR_TOOLTIP_SORT_ORDER),
+		EndContainer(),
+		NWidget(NWID_VERTICAL, NC_EQUALSIZE),
+			NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VL_GROUP_BY_PULLDOWN), SetMinimalSize(0, 12), SetFill(1, 1), SetToolTip(STR_TOOLTIP_GROUP_ORDER),
+			NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VL_SORT_BY_PULLDOWN), SetMinimalSize(0, 12), SetFill(1, 1), SetToolTip(STR_TOOLTIP_SORT_CRITERIA),
+		EndContainer(),
+		NWidget(NWID_VERTICAL, NC_EQUALSIZE),
+			NWidget(WWT_PANEL, COLOUR_GREY), SetMinimalSize(0, 12), SetFill(1, 1), SetResize(1, 0), EndContainer(),
+			NWidget(NWID_HORIZONTAL),
+				NWidget(NWID_SELECTION, INVALID_COLOUR, WID_VL_FILTER_BY_CARGO_SEL),
+					NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VL_FILTER_BY_CARGO), SetMinimalSize(0, 12), SetFill(0, 1), SetStringTip(STR_JUST_STRING, STR_TOOLTIP_FILTER_CRITERIA),
+				EndContainer(),
+				NWidget(WWT_PANEL, COLOUR_GREY), SetMinimalSize(0, 12), SetFill(1, 1), SetResize(1, 0), EndContainer(),
+			EndContainer(),
+		EndContainer(),
 	EndContainer(),
 
 	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VL_SORT_ORDER), SetMinimalSize(81, 12), SetFill(0, 1), SetDataTip(STR_BUTTON_SORT_BY, STR_TOOLTIP_SORT_ORDER),
-		NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VL_SORT_BY_PULLDOWN), SetMinimalSize(167, 12), SetFill(0, 1), SetDataTip(0x0, STR_TOOLTIP_SORT_CRITERIA),
-		NWidget(WWT_PANEL, COLOUR_GREY), SetMinimalSize(12, 12), SetFill(1, 1), SetResize(1, 0), EndContainer(),
-	EndContainer(),
-
-	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_MATRIX, COLOUR_GREY, WID_VL_LIST), SetMinimalSize(248, 0), SetFill(1, 0), SetResize(1, 1), SetMatrixDataTip(1, 0, STR_NULL), SetScrollbar(WID_VL_SCROLLBAR),
+		NWidget(WWT_MATRIX, COLOUR_GREY, WID_VL_LIST), SetMinimalSize(248, 0), SetFill(1, 0), SetResize(1, 1), SetMatrixDataTip(1, 0), SetScrollbar(WID_VL_SCROLLBAR),
 		NWidget(NWID_VSCROLLBAR, COLOUR_GREY, WID_VL_SCROLLBAR),
 	EndContainer(),
 
@@ -1394,14 +1657,14 @@ static const NWidgetPart _nested_vehicle_list[] = {
 		NWidget(NWID_SELECTION, INVALID_COLOUR, WID_VL_HIDE_BUTTONS),
 			NWidget(NWID_HORIZONTAL),
 				NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VL_AVAILABLE_VEHICLES), SetMinimalSize(106, 12), SetFill(0, 1),
-								SetDataTip(STR_BLACK_STRING, STR_VEHICLE_LIST_AVAILABLE_ENGINES_TOOLTIP),
+								SetStringTip(STR_JUST_STRING, STR_VEHICLE_LIST_AVAILABLE_ENGINES_TOOLTIP),
 				NWidget(WWT_PANEL, COLOUR_GREY), SetMinimalSize(0, 12), SetResize(1, 0), SetFill(1, 1), EndContainer(),
 				NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VL_MANAGE_VEHICLES_DROPDOWN), SetMinimalSize(118, 12), SetFill(0, 1),
-								SetDataTip(STR_VEHICLE_LIST_MANAGE_LIST, STR_VEHICLE_LIST_MANAGE_LIST_TOOLTIP),
-				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VL_STOP_ALL), SetMinimalSize(12, 12), SetFill(0, 1),
-								SetDataTip(SPR_FLAG_VEH_STOPPED, STR_VEHICLE_LIST_MASS_STOP_LIST_TOOLTIP),
-				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VL_START_ALL), SetMinimalSize(12, 12), SetFill(0, 1),
-								SetDataTip(SPR_FLAG_VEH_RUNNING, STR_VEHICLE_LIST_MASS_START_LIST_TOOLTIP),
+								SetStringTip(STR_VEHICLE_LIST_MANAGE_LIST, STR_VEHICLE_LIST_MANAGE_LIST_TOOLTIP),
+				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VL_STOP_ALL), SetAspect(WidgetDimensions::ASPECT_VEHICLE_FLAG), SetFill(0, 1),
+								SetSpriteTip(SPR_FLAG_VEH_STOPPED, STR_VEHICLE_LIST_MASS_STOP_LIST_TOOLTIP),
+				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VL_START_ALL), SetAspect(WidgetDimensions::ASPECT_VEHICLE_FLAG), SetFill(0, 1),
+								SetSpriteTip(SPR_FLAG_VEH_RUNNING, STR_VEHICLE_LIST_MASS_START_LIST_TOOLTIP),
 			EndContainer(),
 			/* Widget to be shown for other companies hiding the previous 5 widgets. */
 			NWidget(WWT_PANEL, COLOUR_GREY), SetFill(1, 1), SetResize(1, 0), EndContainer(),
@@ -1422,20 +1685,20 @@ static void DrawSmallOrderList(const Vehicle *v, int left, int right, int y, uin
 	VehicleOrderID oid = start;
 
 	do {
-		if (oid == v->cur_real_order_index) DrawString(left, right, y, STR_TINY_RIGHT_ARROW, TC_BLACK);
+		if (oid == v->cur_real_order_index) DrawString(left, right, y, STR_JUST_RIGHT_ARROW, TC_BLACK, SA_LEFT, false, FS_SMALL);
 
 		if (order->IsType(OT_GOTO_STATION)) {
 			SetDParam(0, order->GetDestination());
-			DrawString(left + l_offset, right - r_offset, y, STR_TINY_BLACK_STATION);
+			DrawString(left + l_offset, right - r_offset, y, STR_STATION_NAME, TC_BLACK, SA_LEFT, false, FS_SMALL);
 
-			y += FONT_HEIGHT_SMALL;
+			y += GetCharacterHeight(FS_SMALL);
 			if (++i == 4) break;
 		}
 
 		oid++;
 		order = order->next;
 		if (order == nullptr) {
-			order = v->orders.list->GetFirstOrder();
+			order = v->orders->GetFirstOrder();
 			oid = 0;
 		}
 	} while (oid != start);
@@ -1451,9 +1714,9 @@ static void DrawSmallOrderList(const Order *order, int left, int right, int y, u
 	while (order != nullptr) {
 		if (order->IsType(OT_GOTO_STATION)) {
 			SetDParam(0, order->GetDestination());
-			DrawString(left + l_offset, right - r_offset, y, STR_TINY_BLACK_STATION);
+			DrawString(left + l_offset, right - r_offset, y, STR_STATION_NAME, TC_BLACK, SA_LEFT, false, FS_SMALL);
 
-			y += FONT_HEIGHT_SMALL;
+			y += GetCharacterHeight(FS_SMALL);
 			if (++i == 4) break;
 		}
 		order = order->next;
@@ -1463,19 +1726,17 @@ static void DrawSmallOrderList(const Order *order, int left, int right, int y, u
 /**
  * Draws an image of a vehicle chain
  * @param v         Front vehicle
- * @param left      The minimum horizontal position
- * @param right     The maximum horizontal position
- * @param y         Vertical position to draw at
+ * @param r         Rect to draw at
  * @param selection Selected vehicle to draw a frame around
  * @param skip      Number of pixels to skip at the front (for scrolling)
  */
-void DrawVehicleImage(const Vehicle *v, int left, int right, int y, VehicleID selection, EngineImageType image_type, int skip)
+void DrawVehicleImage(const Vehicle *v, const Rect &r, VehicleID selection, EngineImageType image_type, int skip)
 {
 	switch (v->type) {
-		case VEH_TRAIN:    DrawTrainImage(Train::From(v), left, right, y, selection, image_type, skip); break;
-		case VEH_ROAD:     DrawRoadVehImage(v, left, right, y, selection, image_type, skip);  break;
-		case VEH_SHIP:     DrawShipImage(v, left, right, y, selection, image_type);     break;
-		case VEH_AIRCRAFT: DrawAircraftImage(v, left, right, y, selection, image_type); break;
+		case VEH_TRAIN:    DrawTrainImage(Train::From(v), r, selection, image_type, skip); break;
+		case VEH_ROAD:     DrawRoadVehImage(v, r, selection, image_type, skip);  break;
+		case VEH_SHIP:     DrawShipImage(v, r, selection, image_type);     break;
+		case VEH_AIRCRAFT: DrawAircraftImage(v, r, selection, image_type); break;
 		default: NOT_REACHED();
 	}
 }
@@ -1489,15 +1750,26 @@ void DrawVehicleImage(const Vehicle *v, int left, int right, int y, VehicleID se
 uint GetVehicleListHeight(VehicleType type, uint divisor)
 {
 	/* Name + vehicle + profit */
-	uint base = ScaleGUITrad(GetVehicleHeight(type)) + 2 * FONT_HEIGHT_SMALL;
+	uint base = ScaleGUITrad(GetVehicleHeight(type)) + 2 * GetCharacterHeight(FS_SMALL) + WidgetDimensions::scaled.matrix.Vertical();
 	/* Drawing of the 4 small orders + profit*/
-	if (type >= VEH_SHIP) base = std::max(base, 5U * FONT_HEIGHT_SMALL);
+	if (type >= VEH_SHIP) base = std::max(base, 6U * GetCharacterHeight(FS_SMALL) + WidgetDimensions::scaled.matrix.Vertical());
 
 	if (divisor == 1) return base;
 
 	/* Make sure the height is dividable by divisor */
 	uint rem = base % divisor;
 	return base + (rem == 0 ? 0 : divisor - rem);
+}
+
+/**
+ * Get width required for the formatted unit number display.
+ * @param digits Number of digits required for unit number.
+ * @return Required width in pixels.
+ */
+static int GetUnitNumberWidth(int digits)
+{
+	SetDParamMaxDigits(0, digits);
+	return GetStringBoundingBox(STR_JUST_COMMA).width;
 }
 
 /**
@@ -1508,63 +1780,92 @@ uint GetVehicleListHeight(VehicleType type, uint divisor)
  */
 void BaseVehicleListWindow::DrawVehicleListItems(VehicleID selected_vehicle, int line_height, const Rect &r) const
 {
-	int left = r.left + WD_MATRIX_LEFT;
-	int right = r.right - WD_MATRIX_RIGHT;
-	int width = right - left;
+	Rect ir = r.WithHeight(line_height).Shrink(WidgetDimensions::scaled.matrix, RectPadding::zero);
 	bool rtl = _current_text_dir == TD_RTL;
 
-	int text_offset = std::max<int>(GetSpriteSize(SPR_PROFIT_LOT).width, GetDigitWidth() * this->unitnumber_digits) + WD_FRAMERECT_RIGHT;
-	int text_left  = left  + (rtl ?           0 : text_offset);
-	int text_right = right - (rtl ? text_offset :           0);
+	Dimension profit = GetSpriteSize(SPR_PROFIT_LOT);
+	int text_offset = std::max<int>(profit.width, GetUnitNumberWidth(this->unitnumber_digits)) + WidgetDimensions::scaled.hsep_normal;
+	Rect tr = ir.Indent(text_offset, rtl);
 
 	bool show_orderlist = this->vli.vtype >= VEH_SHIP;
-	int orderlist_left  = left  + (rtl ? 0 : std::max(ScaleGUITrad(100) + text_offset, width / 2));
-	int orderlist_right = right - (rtl ? std::max(ScaleGUITrad(100) + text_offset, width / 2) : 0);
+	Rect olr = ir.Indent(std::max(ScaleGUITrad(100) + text_offset, ir.Width() / 2), rtl);
 
-	int image_left  = (rtl && show_orderlist) ? orderlist_right : text_left;
-	int image_right = (!rtl && show_orderlist) ? orderlist_left : text_right;
+	int image_left  = (rtl && show_orderlist) ? olr.right : tr.left;
+	int image_right = (!rtl && show_orderlist) ? olr.left : tr.right;
 
-	int vehicle_button_x = rtl ? right - GetSpriteSize(SPR_PROFIT_LOT).width : left;
+	int vehicle_button_x = rtl ? ir.right - profit.width : ir.left;
 
-	int y = r.top;
-	uint max = static_cast<uint>(std::min<size_t>(this->vscroll->GetPosition() + this->vscroll->GetCapacity(), this->vehgroups.size()));
-	for (uint i = this->vscroll->GetPosition(); i < max; ++i) {
-
-		const GUIVehicleGroup &vehgroup = this->vehgroups[i];
+	auto [first, last] = this->vscroll->GetVisibleRangeIterators(this->vehgroups);
+	for (auto it = first; it != last; ++it) {
+		const GUIVehicleGroup &vehgroup = *it;
 
 		SetDParam(0, vehgroup.GetDisplayProfitThisYear());
 		SetDParam(1, vehgroup.GetDisplayProfitLastYear());
-		DrawString(text_left, text_right, y + line_height - FONT_HEIGHT_SMALL - WD_FRAMERECT_BOTTOM - 1, STR_VEHICLE_LIST_PROFIT_THIS_YEAR_LAST_YEAR);
+		DrawString(tr.left, tr.right, ir.bottom - GetCharacterHeight(FS_SMALL) - WidgetDimensions::scaled.framerect.bottom,
+			TimerGameEconomy::UsingWallclockUnits() ? STR_VEHICLE_LIST_PROFIT_THIS_PERIOD_LAST_PERIOD : STR_VEHICLE_LIST_PROFIT_THIS_YEAR_LAST_YEAR);
 
-		DrawVehicleProfitButton(vehgroup.GetOldestVehicleAge(), vehgroup.GetDisplayProfitLastYear(), vehgroup.NumVehicles(), vehicle_button_x, y + FONT_HEIGHT_NORMAL + 3);
+		DrawVehicleProfitButton(vehgroup.GetOldestVehicleAge(), vehgroup.GetDisplayProfitLastYear(), vehgroup.NumVehicles(), vehicle_button_x, ir.top + GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal);
 
 		switch (this->grouping) {
 			case GB_NONE: {
 				const Vehicle *v = vehgroup.GetSingleVehicle();
 
-				DrawVehicleImage(v, image_left, image_right, y + FONT_HEIGHT_SMALL - 1, selected_vehicle, EIT_IN_LIST, 0);
+				if (HasBit(v->vehicle_flags, VF_PATHFINDER_LOST)) {
+					DrawSprite(SPR_WARNING_SIGN, PAL_NONE, vehicle_button_x, ir.top + GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal + profit.height);
+				}
 
-				if (!v->name.empty()) {
+				DrawVehicleImage(v, {image_left, ir.top, image_right, ir.bottom}, selected_vehicle, EIT_IN_LIST, 0);
+
+				if (_settings_client.gui.show_cargo_in_vehicle_lists) {
+					/* Get the cargoes the vehicle can carry */
+					CargoTypes vehicle_cargoes = 0;
+
+					for (auto u = v; u != nullptr; u = u->Next()) {
+						if (u->cargo_cap == 0) continue;
+
+						SetBit(vehicle_cargoes, u->cargo_type);
+					}
+
+					if (!v->name.empty()) {
+						/* The vehicle got a name so we will print it and the cargoes */
+						SetDParam(0, STR_VEHICLE_NAME);
+						SetDParam(1, v->index);
+						SetDParam(2, STR_VEHICLE_LIST_CARGO);
+						SetDParam(3, vehicle_cargoes);
+						DrawString(tr.left, tr.right, ir.top, STR_VEHICLE_LIST_NAME_AND_CARGO, TC_BLACK, SA_LEFT, false, FS_SMALL);
+					} else if (v->group_id != DEFAULT_GROUP) {
+						/* The vehicle has no name, but is member of a group, so print group name and the cargoes */
+						SetDParam(0, STR_GROUP_NAME);
+						SetDParam(1, v->group_id);
+						SetDParam(2, STR_VEHICLE_LIST_CARGO);
+						SetDParam(3, vehicle_cargoes);
+						DrawString(tr.left, tr.right, ir.top, STR_VEHICLE_LIST_NAME_AND_CARGO, TC_BLACK, SA_LEFT, false, FS_SMALL);
+					} else {
+						/* The vehicle has no name, and is not a member of a group, so just print the cargoes */
+						SetDParam(0, vehicle_cargoes);
+						DrawString(tr.left, tr.right, ir.top, STR_VEHICLE_LIST_CARGO, TC_BLACK, SA_LEFT, false, FS_SMALL);
+					}
+				} else if (!v->name.empty()) {
 					/* The vehicle got a name so we will print it */
 					SetDParam(0, v->index);
-					DrawString(text_left, text_right, y, STR_TINY_BLACK_VEHICLE);
+					DrawString(tr.left, tr.right, ir.top, STR_VEHICLE_NAME, TC_BLACK, SA_LEFT, false, FS_SMALL);
 				} else if (v->group_id != DEFAULT_GROUP) {
 					/* The vehicle has no name, but is member of a group, so print group name */
 					SetDParam(0, v->group_id);
-					DrawString(text_left, text_right, y, STR_TINY_GROUP, TC_BLACK);
+					DrawString(tr.left, tr.right, ir.top, STR_GROUP_NAME, TC_BLACK, SA_LEFT, false, FS_SMALL);
 				}
 
-				if (show_orderlist) DrawSmallOrderList(v, orderlist_left, orderlist_right, y, this->order_arrow_width, v->cur_real_order_index);
+				if (show_orderlist) DrawSmallOrderList(v, olr.left, olr.right, ir.top + GetCharacterHeight(FS_SMALL), this->order_arrow_width, v->cur_real_order_index);
 
-				StringID str;
+				TextColour tc;
 				if (v->IsChainInDepot()) {
-					str = STR_BLUE_COMMA;
+					tc = TC_BLUE;
 				} else {
-					str = (v->age > v->max_age - DAYS_IN_LEAP_YEAR) ? STR_RED_COMMA : STR_BLACK_COMMA;
+					tc = (v->age > v->max_age - CalendarTime::DAYS_IN_LEAP_YEAR) ? TC_RED : TC_BLACK;
 				}
 
 				SetDParam(0, v->unitnumber);
-				DrawString(left, right, y + 2, str);
+				DrawString(ir.left, ir.right, ir.top + WidgetDimensions::scaled.framerect.top, STR_JUST_COMMA, tc);
 				break;
 			}
 
@@ -1572,21 +1873,21 @@ void BaseVehicleListWindow::DrawVehicleListItems(VehicleID selected_vehicle, int
 				assert(vehgroup.NumVehicles() > 0);
 
 				for (int i = 0; i < static_cast<int>(vehgroup.NumVehicles()); ++i) {
-					if (image_left + 8 * i >= image_right) break; // Break if there is no more space to draw any more vehicles anyway.
-					DrawVehicleImage(vehgroup.vehicles_begin[i], image_left + 8 * i, image_right, y + FONT_HEIGHT_SMALL - 1, selected_vehicle, EIT_IN_LIST, 0);
+					if (image_left + WidgetDimensions::scaled.hsep_wide * i >= image_right) break; // Break if there is no more space to draw any more vehicles anyway.
+					DrawVehicleImage(vehgroup.vehicles_begin[i], {image_left + WidgetDimensions::scaled.hsep_wide * i, ir.top, image_right, ir.bottom}, selected_vehicle, EIT_IN_LIST, 0);
 				}
 
-				if (show_orderlist) DrawSmallOrderList((vehgroup.vehicles_begin[0])->GetFirstOrder(), orderlist_left, orderlist_right, y, this->order_arrow_width);
+				if (show_orderlist) DrawSmallOrderList((vehgroup.vehicles_begin[0])->GetFirstOrder(), olr.left, olr.right, ir.top + GetCharacterHeight(FS_SMALL), this->order_arrow_width);
 
 				SetDParam(0, vehgroup.NumVehicles());
-				DrawString(left, right, y + 2, STR_BLACK_COMMA);
+				DrawString(ir.left, ir.right, ir.top + WidgetDimensions::scaled.framerect.top, STR_JUST_COMMA, TC_BLACK);
 				break;
 
 			default:
 				NOT_REACHED();
 		}
 
-		y += line_height;
+		ir = ir.Translate(0, line_height);
 	}
 }
 
@@ -1623,46 +1924,52 @@ void BaseVehicleListWindow::UpdateVehicleGroupBy(GroupBy group_by)
 
 /**
  * Window for the (old) vehicle listing.
- *
- * bitmask for w->window_number
- * 0-7 CompanyID (owner)
- * 8-10 window type (use flags in vehicle_gui.h)
- * 11-15 vehicle type (using VEH_, but can be compressed to fewer bytes if needed)
- * 16-31 StationID or OrderID depending on window type (bit 8-10)
+ * See #VehicleListIdentifier::Pack for the contents of the window number.
  */
 struct VehicleListWindow : public BaseVehicleListWindow {
 private:
 	/** Enumeration of planes of the button row at the bottom. */
-	enum ButtonPlanes {
+	enum ButtonPlanes : uint8_t {
 		BP_SHOW_BUTTONS, ///< Show the buttons.
 		BP_HIDE_BUTTONS, ///< Show the empty panel.
 	};
 
+	/** Enumeration of planes of the title row at the top. */
+	enum CaptionPlanes : uint8_t {
+		BP_NORMAL,        ///< Show shared orders caption and buttons.
+		BP_SHARED_ORDERS, ///< Show the normal caption.
+	};
+
 public:
-	VehicleListWindow(WindowDesc *desc, WindowNumber window_number) : BaseVehicleListWindow(desc, window_number)
+	VehicleListWindow(WindowDesc &desc, WindowNumber window_number, const VehicleListIdentifier &vli) : BaseVehicleListWindow(desc, vli)
 	{
 		this->CreateNestedTree();
 
+		this->GetWidget<NWidgetStacked>(WID_VL_FILTER_BY_CARGO_SEL)->SetDisplayedPlane((this->vli.type == VL_SHARED_ORDERS) ? SZSP_NONE : 0);
+
 		this->vscroll = this->GetScrollbar(WID_VL_SCROLLBAR);
 
-		this->BuildVehicleList();
-		this->SortVehicleList();
-
 		/* Set up the window widgets */
-		this->GetWidget<NWidgetCore>(WID_VL_LIST)->tool_tip = STR_VEHICLE_LIST_TRAIN_LIST_TOOLTIP + this->vli.vtype;
+		this->GetWidget<NWidgetCore>(WID_VL_LIST)->SetToolTip(STR_VEHICLE_LIST_TRAIN_LIST_TOOLTIP + this->vli.vtype);
 
+		NWidgetStacked *nwi = this->GetWidget<NWidgetStacked>(WID_VL_CAPTION_SELECTION);
 		if (this->vli.type == VL_SHARED_ORDERS) {
-			this->GetWidget<NWidgetCore>(WID_VL_CAPTION)->widget_data = STR_VEHICLE_LIST_SHARED_ORDERS_LIST_CAPTION;
+			this->GetWidget<NWidgetCore>(WID_VL_CAPTION_SHARED_ORDERS)->SetString(STR_VEHICLE_LIST_SHARED_ORDERS_LIST_CAPTION);
 			/* If we are in the shared orders window, then disable the group-by dropdown menu.
 			 * Remove this when the group-by dropdown menu has another option apart from grouping by shared orders. */
 			this->SetWidgetDisabledState(WID_VL_GROUP_ORDER, true);
 			this->SetWidgetDisabledState(WID_VL_GROUP_BY_PULLDOWN, true);
+			nwi->SetDisplayedPlane(BP_SHARED_ORDERS);
 		} else {
-			this->GetWidget<NWidgetCore>(WID_VL_CAPTION)->widget_data = STR_VEHICLE_LIST_TRAIN_CAPTION + this->vli.vtype;
+			this->GetWidget<NWidgetCore>(WID_VL_CAPTION)->SetString(STR_VEHICLE_LIST_TRAIN_CAPTION + this->vli.vtype);
+			nwi->SetDisplayedPlane(BP_NORMAL);
 		}
 
 		this->FinishInitNested(window_number);
 		if (this->vli.company != OWNER_NONE) this->owner = this->vli.company;
+
+		this->BuildVehicleList();
+		this->SortVehicleList();
 	}
 
 	~VehicleListWindow()
@@ -1670,58 +1977,74 @@ public:
 		*this->sorting = this->vehgroups.GetListing();
 	}
 
-	void UpdateWidgetSize(int widget, Dimension *size, const Dimension &padding, Dimension *fill, Dimension *resize) override
+	void UpdateWidgetSize(WidgetID widget, Dimension &size, [[maybe_unused]] const Dimension &padding, [[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		switch (widget) {
 			case WID_VL_LIST:
-				resize->height = GetVehicleListHeight(this->vli.vtype, 1);
+				resize.height = GetVehicleListHeight(this->vli.vtype, 1);
 
 				switch (this->vli.vtype) {
 					case VEH_TRAIN:
 					case VEH_ROAD:
-						size->height = 6 * resize->height;
+						size.height = 6 * resize.height;
 						break;
 					case VEH_SHIP:
 					case VEH_AIRCRAFT:
-						size->height = 4 * resize->height;
+						size.height = 4 * resize.height;
 						break;
 					default: NOT_REACHED();
 				}
 				break;
 
 			case WID_VL_SORT_ORDER: {
-				Dimension d = GetStringBoundingBox(this->GetWidget<NWidgetCore>(widget)->widget_data);
+				Dimension d = GetStringBoundingBox(this->GetWidget<NWidgetCore>(widget)->GetString());
 				d.width += padding.width + Window::SortButtonWidth() * 2; // Doubled since the string is centred and it also looks better.
 				d.height += padding.height;
-				*size = maxdim(*size, d);
+				size = maxdim(size, d);
 				break;
 			}
 
+			case WID_VL_GROUP_BY_PULLDOWN:
+				size.width = GetStringListWidth(this->vehicle_group_by_names) + padding.width;
+				break;
+
+			case WID_VL_SORT_BY_PULLDOWN:
+				size.width = GetStringListWidth(this->vehicle_group_none_sorter_names_calendar);
+				size.width = std::max(size.width, GetStringListWidth(this->vehicle_group_none_sorter_names_wallclock));
+				size.width = std::max(size.width, GetStringListWidth(this->vehicle_group_shared_orders_sorter_names_calendar));
+				size.width = std::max(size.width, GetStringListWidth(this->vehicle_group_shared_orders_sorter_names_wallclock));
+				size.width += padding.width;
+				break;
+
+			case WID_VL_FILTER_BY_CARGO:
+				size.width = std::max(size.width, GetDropDownListDimension(this->BuildCargoDropDownList(true)).width + padding.width);
+				break;
+
 			case WID_VL_MANAGE_VEHICLES_DROPDOWN: {
-				Dimension d = this->GetActionDropdownSize(this->vli.type == VL_STANDARD, false);
+				Dimension d = this->GetActionDropdownSize(this->vli.type == VL_STANDARD, false, true);
 				d.height += padding.height;
 				d.width  += padding.width;
-				*size = maxdim(*size, d);
+				size = maxdim(size, d);
 				break;
 			}
 		}
 	}
 
-	void SetStringParameters(int widget) const override
+	void SetStringParameters(WidgetID widget) const override
 	{
 		switch (widget) {
 			case WID_VL_AVAILABLE_VEHICLES:
 				SetDParam(0, STR_VEHICLE_LIST_AVAILABLE_TRAINS + this->vli.vtype);
 				break;
 
-			case WID_VL_CAPTION: {
+			case WID_VL_FILTER_BY_CARGO:
+				SetDParam(0, this->GetCargoFilterLabel(this->cargo_filter_criteria));
+				break;
+
+			case WID_VL_CAPTION:
+			case WID_VL_CAPTION_SHARED_ORDERS: {
 				switch (this->vli.type) {
 					case VL_SHARED_ORDERS: // Shared Orders
-						if (this->vehicles.size() == 0) {
-							/* We can't open this window without vehicles using this order
-							 * and we should close the window when deleting the order. */
-							NOT_REACHED();
-						}
 						SetDParam(0, this->vehicles.size());
 						break;
 
@@ -1750,7 +2073,7 @@ public:
 		}
 	}
 
-	void DrawWidget(const Rect &r, int widget) const override
+	void DrawWidget(const Rect &r, WidgetID widget) const override
 	{
 		switch (widget) {
 			case WID_VL_SORT_ORDER:
@@ -1769,8 +2092,8 @@ public:
 		this->BuildVehicleList();
 		this->SortVehicleList();
 
-		if (this->vehicles.size() == 0 && this->IsWidgetLowered(WID_VL_MANAGE_VEHICLES_DROPDOWN)) {
-			HideDropDownMenu(this);
+		if (this->vehicles.empty() && this->IsWidgetLowered(WID_VL_MANAGE_VEHICLES_DROPDOWN)) {
+			this->CloseChildWindows(WC_DROPDOWN_MENU);
 		}
 
 		/* Hide the widgets that we will not use in this window
@@ -1783,25 +2106,41 @@ public:
 		}
 		if (this->owner == _local_company) {
 			this->SetWidgetDisabledState(WID_VL_AVAILABLE_VEHICLES, this->vli.type != VL_STANDARD);
-			this->SetWidgetsDisabledState(this->vehicles.size() == 0,
+			this->SetWidgetsDisabledState(this->vehicles.empty(),
 				WID_VL_MANAGE_VEHICLES_DROPDOWN,
 				WID_VL_STOP_ALL,
-				WID_VL_START_ALL,
-				WIDGET_LIST_END);
+				WID_VL_START_ALL);
 		}
 
 		/* Set text of group by dropdown widget. */
-		this->GetWidget<NWidgetCore>(WID_VL_GROUP_BY_PULLDOWN)->widget_data = this->vehicle_group_by_names[this->grouping];
+		this->GetWidget<NWidgetCore>(WID_VL_GROUP_BY_PULLDOWN)->SetString(std::data(this->vehicle_group_by_names)[this->grouping]);
 
 		/* Set text of sort by dropdown widget. */
-		this->GetWidget<NWidgetCore>(WID_VL_SORT_BY_PULLDOWN)->widget_data = this->GetVehicleSorterNames()[this->vehgroups.SortType()];
+		this->GetWidget<NWidgetCore>(WID_VL_SORT_BY_PULLDOWN)->SetString(this->GetVehicleSorterNames()[this->vehgroups.SortType()]);
+
+		this->GetWidget<NWidgetCore>(WID_VL_FILTER_BY_CARGO)->SetString(this->GetCargoFilterLabel(this->cargo_filter_criteria));
 
 		this->DrawWidgets();
 	}
 
-	void OnClick(Point pt, int widget, int click_count) override
+	bool last_overlay_state;
+	void OnMouseLoop() override
+	{
+		if (last_overlay_state != ShowCargoIconOverlay()) {
+			last_overlay_state = ShowCargoIconOverlay();
+			this->SetDirty();
+		}
+	}
+
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
 	{
 		switch (widget) {
+		    case WID_VL_ORDER_VIEW: // Open the shared orders window
+				assert(this->vli.type == VL_SHARED_ORDERS);
+				assert(!this->vehicles.empty());
+				ShowOrdersWindow(this->vehicles[0]);
+				break;
+
 			case WID_VL_SORT_ORDER: // Flip sorting method ascending/descending
 				this->vehgroups.ToggleSortOrder();
 				this->SetDirty();
@@ -1816,11 +2155,15 @@ public:
 						(this->vli.vtype == VEH_TRAIN || this->vli.vtype == VEH_ROAD) ? 0 : (1 << 10));
 				return;
 
-			case WID_VL_LIST: { // Matrix to show vehicles
-				uint id_v = this->vscroll->GetScrolledRowFromWidget(pt.y, this, WID_VL_LIST);
-				if (id_v >= this->vehgroups.size()) return; // click out of list bound
+			case WID_VL_FILTER_BY_CARGO: // Cargo filter dropdown
+				ShowDropDownList(this, this->BuildCargoDropDownList(false), this->cargo_filter_criteria, widget);
+				break;
 
-				const GUIVehicleGroup &vehgroup = this->vehgroups[id_v];
+			case WID_VL_LIST: { // Matrix to show vehicles
+				auto it = this->vscroll->GetScrolledItemFromWidget(this->vehgroups, pt.y, this, WID_VL_LIST);
+				if (it == this->vehgroups.end()) return; // click out of list bound
+
+				const GUIVehicleGroup &vehgroup = *it;
 				switch (this->grouping) {
 					case GB_NONE: {
 						const Vehicle *v = vehgroup.GetSingleVehicle();
@@ -1836,13 +2179,17 @@ public:
 
 					case GB_SHARED_ORDERS: {
 						assert(vehgroup.NumVehicles() > 0);
-						const Vehicle *v = vehgroup.vehicles_begin[0];
-						/* We do not support VehicleClicked() here since the contextual action may only make sense for individual vehicles */
-
-						if (vehgroup.NumVehicles() == 1) {
-							ShowVehicleViewWindow(v);
-						} else {
-							ShowVehicleListWindow(v);
+						if (!VehicleClicked(vehgroup)) {
+							const Vehicle *v = vehgroup.vehicles_begin[0];
+							if (_ctrl_pressed) {
+								ShowOrdersWindow(v);
+							} else {
+								if (vehgroup.NumVehicles() == 1) {
+									ShowVehicleViewWindow(v);
+								} else {
+									ShowVehicleListWindow(v);
+								}
+							}
 						}
 						break;
 					}
@@ -1858,18 +2205,18 @@ public:
 				break;
 
 			case WID_VL_MANAGE_VEHICLES_DROPDOWN: {
-				ShowDropDownList(this, this->BuildActionDropdownList(VehicleListIdentifier::UnPack(this->window_number).type == VL_STANDARD, false), 0, WID_VL_MANAGE_VEHICLES_DROPDOWN);
+				ShowDropDownList(this, this->BuildActionDropdownList(this->vli.type == VL_STANDARD, false, true), 0, WID_VL_MANAGE_VEHICLES_DROPDOWN);
 				break;
 			}
 
 			case WID_VL_STOP_ALL:
 			case WID_VL_START_ALL:
-				DoCommandP(0, (1 << 1) | (widget == WID_VL_START_ALL ? (1 << 0) : 0), this->window_number, CMD_MASS_START_STOP);
+				Command<CMD_MASS_START_STOP>::Post(TileIndex{}, widget == WID_VL_START_ALL, true, this->vli);
 				break;
 		}
 	}
 
-	void OnDropdownSelect(int widget, int index) override
+	void OnDropdownSelect(WidgetID widget, int index) override
 	{
 		switch (widget) {
 			case WID_VL_GROUP_BY_PULLDOWN:
@@ -1880,8 +2227,12 @@ public:
 				this->vehgroups.SetSortType(index);
 				break;
 
+			case WID_VL_FILTER_BY_CARGO:
+				this->SetCargoFilter(index);
+				break;
+
 			case WID_VL_MANAGE_VEHICLES_DROPDOWN:
-				assert(this->vehicles.size() != 0);
+				assert(!this->vehicles.empty());
 
 				switch (index) {
 					case ADI_REPLACE: // Replace window
@@ -1889,7 +2240,11 @@ public:
 						break;
 					case ADI_SERVICE: // Send for servicing
 					case ADI_DEPOT: // Send to Depots
-						DoCommandP(0, DEPOT_MASS_SEND | (index == ADI_SERVICE ? DEPOT_SERVICE : (DepotCommand)0), this->window_number, GetCmdSendToDepot(this->vli.vtype));
+						Command<CMD_SEND_VEHICLE_TO_DEPOT>::Post(GetCmdSendToDepotMsg(this->vli.vtype), INVALID_VEHICLE, (index == ADI_SERVICE ? DepotCommandFlag::Service : DepotCommandFlags{}) | DepotCommandFlag::MassSend, this->vli);
+						break;
+
+					case ADI_CREATE_GROUP: // Create group
+						Command<CMD_ADD_VEHICLE_GROUP>::Post(CcAddVehicleNewGroup, NEW_GROUP, INVALID_VEHICLE, false, this->vli);
 						break;
 
 					default: NOT_REACHED();
@@ -1921,12 +2276,12 @@ public:
 	 * @param data Information about the changed data.
 	 * @param gui_scope Whether the call is done from GUI scope. You may not do everything when not in GUI scope. See #InvalidateWindowData() for details.
 	 */
-	void OnInvalidateData(int data = 0, bool gui_scope = true) override
+	void OnInvalidateData([[maybe_unused]] int data = 0, [[maybe_unused]] bool gui_scope = true) override
 	{
 		if (!gui_scope && HasBit(data, 31) && this->vli.type == VL_SHARED_ORDERS) {
 			/* Needs to be done in command-scope, so everything stays valid */
 			this->vli.index = GB(data, 0, 20);
-			this->window_number = this->vli.Pack();
+			this->window_number = this->vli.ToWindowNumber();
 			this->vehgroups.ForceRebuild();
 			return;
 		}
@@ -1940,31 +2295,40 @@ public:
 	}
 };
 
-static WindowDesc _vehicle_list_other_desc(
-	WDP_AUTO, "list_vehicles", 260, 246,
-	WC_INVALID, WC_NONE,
-	0,
-	_nested_vehicle_list, lengthof(_nested_vehicle_list)
-);
+static WindowDesc _vehicle_list_desc[] = {
+	{
+		WDP_AUTO, "list_vehicles_train", 325, 246,
+		WC_TRAINS_LIST, WC_NONE,
+		{},
+		_nested_vehicle_list
+	},
+	{
+		WDP_AUTO, "list_vehicles_roadveh", 260, 246,
+		WC_ROADVEH_LIST, WC_NONE,
+		{},
+		_nested_vehicle_list
+	},
+	{
+		WDP_AUTO, "list_vehicles_ship", 260, 246,
+		WC_SHIPS_LIST, WC_NONE,
+		{},
+		_nested_vehicle_list
+	},
+	{
+		WDP_AUTO, "list_vehicles_aircraft", 260, 246,
+		WC_AIRCRAFT_LIST, WC_NONE,
+		{},
+		_nested_vehicle_list
+	}
+};
 
-static WindowDesc _vehicle_list_train_desc(
-	WDP_AUTO, "list_vehicles_train", 325, 246,
-	WC_TRAINS_LIST, WC_NONE,
-	0,
-	_nested_vehicle_list, lengthof(_nested_vehicle_list)
-);
-
-static void ShowVehicleListWindowLocal(CompanyID company, VehicleListType vlt, VehicleType vehicle_type, uint32 unique_number)
+static void ShowVehicleListWindowLocal(CompanyID company, VehicleListType vlt, VehicleType vehicle_type, uint32_t unique_number)
 {
 	if (!Company::IsValidID(company) && company != OWNER_NONE) return;
 
-	WindowNumber num = VehicleListIdentifier(vlt, vehicle_type, company, unique_number).Pack();
-	if (vehicle_type == VEH_TRAIN) {
-		AllocateWindowDescFront<VehicleListWindow>(&_vehicle_list_train_desc, num);
-	} else {
-		_vehicle_list_other_desc.cls = GetWindowClassForVehicleType(vehicle_type);
-		AllocateWindowDescFront<VehicleListWindow>(&_vehicle_list_other_desc, num);
-	}
+	assert(vehicle_type < std::size(_vehicle_list_desc));
+	VehicleListIdentifier vli(vlt, vehicle_type, company, unique_number);
+	AllocateWindowDescFront<VehicleListWindow>(_vehicle_list_desc[vehicle_type], vli.ToWindowNumber(), vli);
 }
 
 void ShowVehicleListWindow(CompanyID company, VehicleType vehicle_type)
@@ -1993,7 +2357,7 @@ void ShowVehicleListWindow(CompanyID company, VehicleType vehicle_type, StationI
 
 void ShowVehicleListWindow(CompanyID company, VehicleType vehicle_type, TileIndex depot_tile)
 {
-	uint16 depot_airport_index;
+	uint16_t depot_airport_index;
 
 	if (vehicle_type == VEH_AIRCRAFT) {
 		depot_airport_index = GetStationIndex(depot_tile);
@@ -2012,10 +2376,10 @@ static_assert(WID_VD_DETAILS_CAPACITY_OF_EACH == WID_VD_DETAILS_CARGO_CARRIED + 
 static_assert(WID_VD_DETAILS_TOTAL_CARGO      == WID_VD_DETAILS_CARGO_CARRIED + TDW_TAB_TOTALS  );
 
 /** Vehicle details widgets (other than train). */
-static const NWidgetPart _nested_nontrain_vehicle_details_widgets[] = {
+static constexpr NWidgetPart _nested_nontrain_vehicle_details_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
-		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VD_CAPTION), SetDataTip(STR_VEHICLE_DETAILS_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VD_CAPTION), SetStringTip(STR_VEHICLE_DETAILS_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
 		NWidget(WWT_SHADEBOX, COLOUR_GREY),
 		NWidget(WWT_DEFSIZEBOX, COLOUR_GREY),
 		NWidget(WWT_STICKYBOX, COLOUR_GREY),
@@ -2024,64 +2388,69 @@ static const NWidgetPart _nested_nontrain_vehicle_details_widgets[] = {
 	NWidget(WWT_PANEL, COLOUR_GREY, WID_VD_MIDDLE_DETAILS), SetMinimalSize(405, 45), SetResize(1, 0), EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_PUSHARROWBTN, COLOUR_GREY, WID_VD_DECREASE_SERVICING_INTERVAL), SetFill(0, 1),
-				SetDataTip(AWV_DECREASE, STR_VEHICLE_DETAILS_DECREASE_SERVICING_INTERVAL_TOOLTIP),
+				SetArrowWidgetTypeTip(AWV_DECREASE),
 		NWidget(WWT_PUSHARROWBTN, COLOUR_GREY, WID_VD_INCREASE_SERVICING_INTERVAL), SetFill(0, 1),
-				SetDataTip(AWV_INCREASE, STR_VEHICLE_DETAILS_INCREASE_SERVICING_INTERVAL_TOOLTIP),
+				SetArrowWidgetTypeTip(AWV_INCREASE),
 		NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VD_SERVICE_INTERVAL_DROPDOWN), SetFill(0, 1),
-				SetDataTip(STR_EMPTY, STR_SERVICE_INTERVAL_DROPDOWN_TOOLTIP),
+				SetStringTip(STR_EMPTY, STR_SERVICE_INTERVAL_DROPDOWN_TOOLTIP),
 		NWidget(WWT_PANEL, COLOUR_GREY, WID_VD_SERVICING_INTERVAL), SetFill(1, 1), SetResize(1, 0), EndContainer(),
 		NWidget(WWT_RESIZEBOX, COLOUR_GREY),
 	EndContainer(),
 };
 
 /** Train details widgets. */
-static const NWidgetPart _nested_train_vehicle_details_widgets[] = {
+static constexpr NWidgetPart _nested_train_vehicle_details_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
-		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VD_CAPTION), SetDataTip(STR_VEHICLE_DETAILS_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VD_CAPTION), SetStringTip(STR_VEHICLE_DETAILS_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
 		NWidget(WWT_SHADEBOX, COLOUR_GREY),
 		NWidget(WWT_DEFSIZEBOX, COLOUR_GREY),
 		NWidget(WWT_STICKYBOX, COLOUR_GREY),
 	EndContainer(),
 	NWidget(WWT_PANEL, COLOUR_GREY, WID_VD_TOP_DETAILS), SetResize(1, 0), SetMinimalSize(405, 42), EndContainer(),
 	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_MATRIX, COLOUR_GREY, WID_VD_MATRIX), SetResize(1, 1), SetMinimalSize(393, 45), SetMatrixDataTip(1, 0, STR_NULL), SetFill(1, 0), SetScrollbar(WID_VD_SCROLLBAR),
+		NWidget(WWT_MATRIX, COLOUR_GREY, WID_VD_MATRIX), SetResize(1, 1), SetMinimalSize(393, 45), SetMatrixDataTip(1, 0), SetFill(1, 0), SetScrollbar(WID_VD_SCROLLBAR),
 		NWidget(NWID_VSCROLLBAR, COLOUR_GREY, WID_VD_SCROLLBAR),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_PUSHARROWBTN, COLOUR_GREY, WID_VD_DECREASE_SERVICING_INTERVAL), SetFill(0, 1),
-				SetDataTip(AWV_DECREASE, STR_VEHICLE_DETAILS_DECREASE_SERVICING_INTERVAL_TOOLTIP),
+				SetArrowWidgetTypeTip(AWV_DECREASE),
 		NWidget(WWT_PUSHARROWBTN, COLOUR_GREY, WID_VD_INCREASE_SERVICING_INTERVAL), SetFill(0, 1),
-				SetDataTip(AWV_INCREASE, STR_VEHICLE_DETAILS_INCREASE_SERVICING_INTERVAL_TOOLTIP),
+				SetArrowWidgetTypeTip(AWV_INCREASE),
 		NWidget(WWT_DROPDOWN, COLOUR_GREY, WID_VD_SERVICE_INTERVAL_DROPDOWN), SetFill(0, 1),
-				SetDataTip(STR_EMPTY, STR_SERVICE_INTERVAL_DROPDOWN_TOOLTIP),
+				SetStringTip(STR_EMPTY, STR_SERVICE_INTERVAL_DROPDOWN_TOOLTIP),
 		NWidget(WWT_PANEL, COLOUR_GREY, WID_VD_SERVICING_INTERVAL), SetFill(1, 1), SetResize(1, 0), EndContainer(),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VD_DETAILS_CARGO_CARRIED), SetMinimalSize(96, 12),
-				SetDataTip(STR_VEHICLE_DETAIL_TAB_CARGO, STR_VEHICLE_DETAILS_TRAIN_CARGO_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
+				SetStringTip(STR_VEHICLE_DETAIL_TAB_CARGO, STR_VEHICLE_DETAILS_TRAIN_CARGO_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VD_DETAILS_TRAIN_VEHICLES), SetMinimalSize(99, 12),
-				SetDataTip(STR_VEHICLE_DETAIL_TAB_INFORMATION, STR_VEHICLE_DETAILS_TRAIN_INFORMATION_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
+				SetStringTip(STR_VEHICLE_DETAIL_TAB_INFORMATION, STR_VEHICLE_DETAILS_TRAIN_INFORMATION_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VD_DETAILS_CAPACITY_OF_EACH), SetMinimalSize(99, 12),
-				SetDataTip(STR_VEHICLE_DETAIL_TAB_CAPACITIES, STR_VEHICLE_DETAILS_TRAIN_CAPACITIES_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
+				SetStringTip(STR_VEHICLE_DETAIL_TAB_CAPACITIES, STR_VEHICLE_DETAILS_TRAIN_CAPACITIES_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
 		NWidget(WWT_PUSHTXTBTN, COLOUR_GREY, WID_VD_DETAILS_TOTAL_CARGO), SetMinimalSize(99, 12),
-				SetDataTip(STR_VEHICLE_DETAIL_TAB_TOTAL_CARGO, STR_VEHICLE_DETAILS_TRAIN_TOTAL_CARGO_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
+				SetStringTip(STR_VEHICLE_DETAIL_TAB_TOTAL_CARGO, STR_VEHICLE_DETAILS_TRAIN_TOTAL_CARGO_TOOLTIP), SetFill(1, 0), SetResize(1, 0),
 		NWidget(WWT_RESIZEBOX, COLOUR_GREY),
 	EndContainer(),
 };
 
 
 extern int GetTrainDetailsWndVScroll(VehicleID veh_id, TrainDetailsWindowTabs det_tab);
-extern void DrawTrainDetails(const Train *v, int left, int right, int y, int vscroll_pos, uint16 vscroll_cap, TrainDetailsWindowTabs det_tab);
-extern void DrawRoadVehDetails(const Vehicle *v, int left, int right, int y);
-extern void DrawShipDetails(const Vehicle *v, int left, int right, int y);
-extern void DrawAircraftDetails(const Aircraft *v, int left, int right, int y);
+extern void DrawTrainDetails(const Train *v, const Rect &r, int vscroll_pos, uint16_t vscroll_cap, TrainDetailsWindowTabs det_tab);
+extern void DrawRoadVehDetails(const Vehicle *v, const Rect &r);
+extern void DrawShipDetails(const Vehicle *v, const Rect &r);
+extern void DrawAircraftDetails(const Aircraft *v, const Rect &r);
 
-static StringID _service_interval_dropdown[] = {
+static StringID _service_interval_dropdown_calendar[] = {
 	STR_VEHICLE_DETAILS_DEFAULT,
 	STR_VEHICLE_DETAILS_DAYS,
 	STR_VEHICLE_DETAILS_PERCENT,
-	INVALID_STRING_ID,
+};
+
+static StringID _service_interval_dropdown_wallclock[] = {
+	STR_VEHICLE_DETAILS_DEFAULT,
+	STR_VEHICLE_DETAILS_MINUTES,
+	STR_VEHICLE_DETAILS_PERCENT,
 };
 
 /** Class for managing the vehicle details window. */
@@ -2090,7 +2459,7 @@ struct VehicleDetailsWindow : Window {
 	Scrollbar *vscroll;
 
 	/** Initialize a newly created vehicle details window */
-	VehicleDetailsWindow(WindowDesc *desc, WindowNumber window_number) : Window(desc)
+	VehicleDetailsWindow(WindowDesc &desc, WindowNumber window_number) : Window(desc)
 	{
 		const Vehicle *v = Vehicle::Get(window_number);
 
@@ -2107,7 +2476,7 @@ struct VehicleDetailsWindow : Window {
 	 * @param data Information about the changed data.
 	 * @param gui_scope Whether the call is done from GUI scope. You may not do everything when not in GUI scope. See #InvalidateWindowData() for details.
 	 */
-	void OnInvalidateData(int data = 0, bool gui_scope = true) override
+	void OnInvalidateData([[maybe_unused]] int data = 0, [[maybe_unused]] bool gui_scope = true) override
 	{
 		if (data == VIWD_AUTOREPLACE) {
 			/* Autoreplace replaced the vehicle.
@@ -2136,38 +2505,39 @@ struct VehicleDetailsWindow : Window {
 		uint desired_height;
 		if (v->HasArticulatedPart()) {
 			/* An articulated RV has its text drawn under the sprite instead of after it, hence 15 pixels extra. */
-			desired_height = WD_FRAMERECT_TOP + ScaleGUITrad(15) + 3 * FONT_HEIGHT_NORMAL + 2 + WD_FRAMERECT_BOTTOM;
+			desired_height = ScaleGUITrad(15) + 3 * GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal * 2;
 			/* Add space for the cargo amount for each part. */
 			for (const Vehicle *u = v; u != nullptr; u = u->Next()) {
-				if (u->cargo_cap != 0) desired_height += FONT_HEIGHT_NORMAL + 1;
+				if (u->cargo_cap != 0) desired_height += GetCharacterHeight(FS_NORMAL);
 			}
 		} else {
-			desired_height = WD_FRAMERECT_TOP + 4 * FONT_HEIGHT_NORMAL + 3 + WD_FRAMERECT_BOTTOM;
+			desired_height = 4 * GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal * 2;
 		}
 		return desired_height;
 	}
 
-	void UpdateWidgetSize(int widget, Dimension *size, const Dimension &padding, Dimension *fill, Dimension *resize) override
+	void UpdateWidgetSize(WidgetID widget, Dimension &size, [[maybe_unused]] const Dimension &padding, [[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		switch (widget) {
 			case WID_VD_TOP_DETAILS: {
 				Dimension dim = { 0, 0 };
-				size->height = WD_FRAMERECT_TOP + 4 * FONT_HEIGHT_NORMAL + WD_FRAMERECT_BOTTOM;
+				size.height = 4 * GetCharacterHeight(FS_NORMAL) + padding.height;
 
 				for (uint i = 0; i < 4; i++) SetDParamMaxValue(i, INT16_MAX);
 				static const StringID info_strings[] = {
 					STR_VEHICLE_INFO_MAX_SPEED,
 					STR_VEHICLE_INFO_WEIGHT_POWER_MAX_SPEED,
 					STR_VEHICLE_INFO_WEIGHT_POWER_MAX_SPEED_MAX_TE,
-					STR_VEHICLE_INFO_PROFIT_THIS_YEAR_LAST_YEAR,
+					STR_VEHICLE_INFO_PROFIT_THIS_YEAR_LAST_YEAR_MIN_PERFORMANCE,
+					STR_VEHICLE_INFO_PROFIT_THIS_PERIOD_LAST_PERIOD_MIN_PERFORMANCE,
 					STR_VEHICLE_INFO_RELIABILITY_BREAKDOWNS
 				};
-				for (uint i = 0; i < lengthof(info_strings); i++) {
-					dim = maxdim(dim, GetStringBoundingBox(info_strings[i]));
+				for (const auto &info_string : info_strings) {
+					dim = maxdim(dim, GetStringBoundingBox(info_string));
 				}
 				SetDParam(0, STR_VEHICLE_INFO_AGE);
-				dim = maxdim(dim, GetStringBoundingBox(STR_VEHICLE_INFO_AGE_RUNNING_COST_YR));
-				size->width = dim.width + WD_FRAMERECT_LEFT + WD_FRAMERECT_RIGHT;
+				dim = maxdim(dim, GetStringBoundingBox(TimerGameEconomy::UsingWallclockUnits() ? STR_VEHICLE_INFO_AGE_RUNNING_COST_PERIOD : STR_VEHICLE_INFO_AGE_RUNNING_COST_YR));
+				size.width = dim.width + padding.width;
 				break;
 			}
 
@@ -2175,15 +2545,15 @@ struct VehicleDetailsWindow : Window {
 				const Vehicle *v = Vehicle::Get(this->window_number);
 				switch (v->type) {
 					case VEH_ROAD:
-						size->height = this->GetRoadVehDetailsHeight(v);
+						size.height = this->GetRoadVehDetailsHeight(v) + padding.height;
 						break;
 
 					case VEH_SHIP:
-						size->height = WD_FRAMERECT_TOP + 4 * FONT_HEIGHT_NORMAL + 3 + WD_FRAMERECT_BOTTOM;
+						size.height = 4 * GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal * 2 + padding.height;
 						break;
 
 					case VEH_AIRCRAFT:
-						size->height = WD_FRAMERECT_TOP + 5 * FONT_HEIGHT_NORMAL + 4 + WD_FRAMERECT_BOTTOM;
+						size.height = 5 * GetCharacterHeight(FS_NORMAL) + WidgetDimensions::scaled.vsep_normal * 2 + padding.height;
 						break;
 
 					default:
@@ -2193,28 +2563,36 @@ struct VehicleDetailsWindow : Window {
 			}
 
 			case WID_VD_MATRIX:
-				resize->height = std::max(ScaleGUITrad(14), WD_MATRIX_TOP + FONT_HEIGHT_NORMAL + WD_MATRIX_BOTTOM);
-				size->height = 4 * resize->height;
+				resize.height = std::max<uint>(ScaleGUITrad(14), GetCharacterHeight(FS_NORMAL) + padding.height);
+				size.height = 4 * resize.height;
 				break;
 
 			case WID_VD_SERVICE_INTERVAL_DROPDOWN: {
-				StringID *strs = _service_interval_dropdown;
-				while (*strs != INVALID_STRING_ID) {
-					*size = maxdim(*size, GetStringBoundingBox(*strs++));
-				}
-				size->width += padding.width;
-				size->height = FONT_HEIGHT_NORMAL + WD_DROPDOWNTEXT_TOP + WD_DROPDOWNTEXT_BOTTOM;
+				Dimension d = maxdim(GetStringListBoundingBox(_service_interval_dropdown_calendar), GetStringListBoundingBox(_service_interval_dropdown_wallclock));
+				d.width += padding.width;
+				d.height += padding.height;
+				size = maxdim(size, d);
 				break;
 			}
 
 			case WID_VD_SERVICING_INTERVAL:
 				SetDParamMaxValue(0, MAX_SERVINT_DAYS); // Roughly the maximum interval
-				SetDParamMaxValue(1, MAX_YEAR * DAYS_IN_YEAR); // Roughly the maximum year
-				size->width = std::max(
+
+				/* Do we show the last serviced value as a date or minutes since service? */
+				if (TimerGameEconomy::UsingWallclockUnits()) {
+					SetDParam(1, STR_VEHICLE_DETAILS_LAST_SERVICE_MINUTES_AGO);
+					/*/ Vehicle was last serviced at year 0, and we're at max year */
+					SetDParamMaxValue(2, EconomyTime::MONTHS_IN_YEAR * EconomyTime::MAX_YEAR.base());
+				} else {
+					SetDParam(1, STR_VEHICLE_DETAILS_LAST_SERVICE_DATE);
+					/*/ Vehicle was last serviced at year 0, and we're at max year */
+					SetDParamMaxValue(2, TimerGameEconomy::DateAtStartOfYear(EconomyTime::MAX_YEAR));
+				}
+				size.width = std::max(
 					GetStringBoundingBox(STR_VEHICLE_DETAILS_SERVICING_INTERVAL_PERCENT).width,
 					GetStringBoundingBox(STR_VEHICLE_DETAILS_SERVICING_INTERVAL_DAYS).width
-				) + WD_FRAMERECT_LEFT + WD_FRAMERECT_RIGHT;
-				size->height = WD_FRAMERECT_TOP + FONT_HEIGHT_NORMAL + WD_FRAMERECT_BOTTOM;
+				) + padding.width;
+				size.height = GetCharacterHeight(FS_NORMAL) + padding.height;
 				break;
 		}
 	}
@@ -2222,6 +2600,8 @@ struct VehicleDetailsWindow : Window {
 	/** Checks whether service interval is enabled for the vehicle. */
 	static bool IsVehicleServiceIntervalEnabled(const VehicleType vehicle_type, CompanyID company_id)
 	{
+		if (_local_company != company_id) return false;
+
 		const VehicleDefaultSettings *vds = &Company::Get(company_id)->settings.vehicle;
 		switch (vehicle_type) {
 			default: NOT_REACHED();
@@ -2236,54 +2616,52 @@ struct VehicleDetailsWindow : Window {
 	 * Draw the details for the given vehicle at the position of the Details windows
 	 *
 	 * @param v     current vehicle
-	 * @param left  The left most coordinate to draw
-	 * @param right The right most coordinate to draw
-	 * @param y     The y coordinate
+	 * @param r     the Rect to draw within
 	 * @param vscroll_pos Position of scrollbar (train only)
 	 * @param vscroll_cap Number of lines currently displayed (train only)
 	 * @param det_tab Selected details tab (train only)
 	 */
-	static void DrawVehicleDetails(const Vehicle *v, int left, int right, int y, int vscroll_pos, uint vscroll_cap, TrainDetailsWindowTabs det_tab)
+	static void DrawVehicleDetails(const Vehicle *v, const Rect &r, int vscroll_pos, uint vscroll_cap, TrainDetailsWindowTabs det_tab)
 	{
 		switch (v->type) {
-			case VEH_TRAIN:    DrawTrainDetails(Train::From(v), left, right, y, vscroll_pos, vscroll_cap, det_tab);  break;
-			case VEH_ROAD:     DrawRoadVehDetails(v, left, right, y);  break;
-			case VEH_SHIP:     DrawShipDetails(v, left, right, y);     break;
-			case VEH_AIRCRAFT: DrawAircraftDetails(Aircraft::From(v), left, right, y); break;
+			case VEH_TRAIN:    DrawTrainDetails(Train::From(v), r, vscroll_pos, vscroll_cap, det_tab);  break;
+			case VEH_ROAD:     DrawRoadVehDetails(v, r);  break;
+			case VEH_SHIP:     DrawShipDetails(v, r);     break;
+			case VEH_AIRCRAFT: DrawAircraftDetails(Aircraft::From(v), r); break;
 			default: NOT_REACHED();
 		}
 	}
 
-	void SetStringParameters(int widget) const override
+	void SetStringParameters(WidgetID widget) const override
 	{
 		if (widget == WID_VD_CAPTION) SetDParam(0, Vehicle::Get(this->window_number)->index);
 	}
 
-	void DrawWidget(const Rect &r, int widget) const override
+	void DrawWidget(const Rect &r, WidgetID widget) const override
 	{
 		const Vehicle *v = Vehicle::Get(this->window_number);
 
 		switch (widget) {
 			case WID_VD_TOP_DETAILS: {
-				int y = r.top + WD_FRAMERECT_TOP;
+				Rect tr = r.Shrink(WidgetDimensions::scaled.framerect);
 
 				/* Draw running cost */
-				SetDParam(1, v->age / DAYS_IN_LEAP_YEAR);
-				SetDParam(0, (v->age + DAYS_IN_YEAR < v->max_age) ? STR_VEHICLE_INFO_AGE : STR_VEHICLE_INFO_AGE_RED);
-				SetDParam(2, v->max_age / DAYS_IN_LEAP_YEAR);
+				SetDParam(1, TimerGameCalendar::DateToYear(v->age));
+				SetDParam(0, (v->age + CalendarTime::DAYS_IN_YEAR < v->max_age) ? STR_VEHICLE_INFO_AGE : STR_VEHICLE_INFO_AGE_RED);
+				SetDParam(2, TimerGameCalendar::DateToYear(v->max_age));
 				SetDParam(3, v->GetDisplayRunningCost());
-				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, y, STR_VEHICLE_INFO_AGE_RUNNING_COST_YR);
-				y += FONT_HEIGHT_NORMAL;
+				DrawString(tr, TimerGameEconomy::UsingWallclockUnits() ? STR_VEHICLE_INFO_AGE_RUNNING_COST_PERIOD : STR_VEHICLE_INFO_AGE_RUNNING_COST_YR);
+				tr.top += GetCharacterHeight(FS_NORMAL);
 
 				/* Draw max speed */
 				StringID string;
 				if (v->type == VEH_TRAIN ||
 						(v->type == VEH_ROAD && _settings_game.vehicle.roadveh_acceleration_model != AM_ORIGINAL)) {
 					const GroundVehicleCache *gcache = v->GetGroundVehicleCache();
-					SetDParam(2, v->GetDisplayMaxSpeed());
+					SetDParam(2, PackVelocity(v->GetDisplayMaxSpeed(), v->type));
 					SetDParam(1, gcache->cached_power);
 					SetDParam(0, gcache->cached_weight);
-					SetDParam(3, gcache->cached_max_te / 1000);
+					SetDParam(3, gcache->cached_max_te);
 					if (v->type == VEH_TRAIN && (_settings_game.vehicle.train_acceleration_model == AM_ORIGINAL ||
 							GetRailTypeInfo(Train::From(v)->railtype)->acceleration_type == 2)) {
 						string = STR_VEHICLE_INFO_WEIGHT_POWER_MAX_SPEED;
@@ -2291,7 +2669,7 @@ struct VehicleDetailsWindow : Window {
 						string = STR_VEHICLE_INFO_WEIGHT_POWER_MAX_SPEED_MAX_TE;
 					}
 				} else {
-					SetDParam(0, v->GetDisplayMaxSpeed());
+					SetDParam(0, PackVelocity(v->GetDisplayMaxSpeed(), v->type));
 					if (v->type == VEH_AIRCRAFT) {
 						SetDParam(1, v->GetEngine()->GetAircraftTypeText());
 						if (Aircraft::From(v)->GetRange() > 0) {
@@ -2304,55 +2682,74 @@ struct VehicleDetailsWindow : Window {
 						string = STR_VEHICLE_INFO_MAX_SPEED;
 					}
 				}
-				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, y, string);
-				y += FONT_HEIGHT_NORMAL;
+				DrawString(tr, string);
+				tr.top += GetCharacterHeight(FS_NORMAL);
 
 				/* Draw profit */
 				SetDParam(0, v->GetDisplayProfitThisYear());
 				SetDParam(1, v->GetDisplayProfitLastYear());
-				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, y, STR_VEHICLE_INFO_PROFIT_THIS_YEAR_LAST_YEAR);
-				y += FONT_HEIGHT_NORMAL;
+				if (v->IsGroundVehicle()) {
+					SetDParam(2, v->GetDisplayMinPowerToWeight());
+					DrawString(tr, TimerGameEconomy::UsingWallclockUnits() ? STR_VEHICLE_INFO_PROFIT_THIS_PERIOD_LAST_PERIOD_MIN_PERFORMANCE : STR_VEHICLE_INFO_PROFIT_THIS_YEAR_LAST_YEAR_MIN_PERFORMANCE);
+				} else {
+					DrawString(tr, TimerGameEconomy::UsingWallclockUnits() ? STR_VEHICLE_INFO_PROFIT_THIS_PERIOD_LAST_PERIOD : STR_VEHICLE_INFO_PROFIT_THIS_YEAR_LAST_YEAR);
+				}
+				tr.top += GetCharacterHeight(FS_NORMAL);
 
 				/* Draw breakdown & reliability */
 				SetDParam(0, ToPercent16(v->reliability));
 				SetDParam(1, v->breakdowns_since_last_service);
-				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, y, STR_VEHICLE_INFO_RELIABILITY_BREAKDOWNS);
+				DrawString(tr, STR_VEHICLE_INFO_RELIABILITY_BREAKDOWNS);
 				break;
 			}
 
-			case WID_VD_MATRIX:
+			case WID_VD_MATRIX: {
 				/* For trains only. */
-				DrawVehicleDetails(v, r.left + WD_MATRIX_LEFT, r.right - WD_MATRIX_RIGHT, r.top + WD_MATRIX_TOP, this->vscroll->GetPosition(), this->vscroll->GetCapacity(), this->tab);
+				DrawVehicleDetails(v, r.Shrink(WidgetDimensions::scaled.matrix, RectPadding::zero).WithHeight(this->resize.step_height), this->vscroll->GetPosition(), this->vscroll->GetCapacity(), this->tab);
 				break;
+			}
 
 			case WID_VD_MIDDLE_DETAILS: {
 				/* For other vehicles, at the place of the matrix. */
 				bool rtl = _current_text_dir == TD_RTL;
-				uint sprite_width = GetSingleVehicleWidth(v, EIT_IN_DETAILS) + WD_FRAMERECT_LEFT + WD_FRAMERECT_RIGHT;
-
-				uint text_left  = r.left  + (rtl ? 0 : sprite_width);
-				uint text_right = r.right - (rtl ? sprite_width : 0);
+				uint sprite_width = GetSingleVehicleWidth(v, EIT_IN_DETAILS) + WidgetDimensions::scaled.framerect.Horizontal();
+				Rect tr = r.Shrink(WidgetDimensions::scaled.framerect);
 
 				/* Articulated road vehicles use a complete line. */
 				if (v->type == VEH_ROAD && v->HasArticulatedPart()) {
-					DrawVehicleImage(v, r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, INVALID_VEHICLE, EIT_IN_DETAILS, 0);
+					DrawVehicleImage(v, tr.WithHeight(ScaleGUITrad(GetVehicleHeight(v->type)), false), INVALID_VEHICLE, EIT_IN_DETAILS, 0);
 				} else {
-					uint sprite_left  = rtl ? text_right : r.left;
-					uint sprite_right = rtl ? r.right : text_left;
-
-					DrawVehicleImage(v, sprite_left + WD_FRAMERECT_LEFT, sprite_right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, INVALID_VEHICLE, EIT_IN_DETAILS, 0);
+					Rect sr = tr.WithWidth(sprite_width, rtl);
+					DrawVehicleImage(v, sr.WithHeight(ScaleGUITrad(GetVehicleHeight(v->type)), false), INVALID_VEHICLE, EIT_IN_DETAILS, 0);
 				}
-				DrawVehicleDetails(v, text_left + WD_FRAMERECT_LEFT, text_right - WD_FRAMERECT_RIGHT, r.top + WD_FRAMERECT_TOP, 0, 0, this->tab);
+
+				DrawVehicleDetails(v, tr.Indent(sprite_width, rtl), 0, 0, this->tab);
 				break;
 			}
 
-			case WID_VD_SERVICING_INTERVAL:
+			case WID_VD_SERVICING_INTERVAL: {
 				/* Draw service interval text */
+				Rect tr = r.Shrink(WidgetDimensions::scaled.framerect);
+
 				SetDParam(0, v->GetServiceInterval());
-				SetDParam(1, v->date_of_last_service);
-				DrawString(r.left + WD_FRAMERECT_LEFT, r.right - WD_FRAMERECT_RIGHT, r.top + (r.bottom - r.top + 1 - FONT_HEIGHT_NORMAL) / 2,
+
+				/* We're using wallclock units. Show minutes since last serviced. */
+				if (TimerGameEconomy::UsingWallclockUnits()) {
+					int minutes_since_serviced = (TimerGameEconomy::date - v->date_of_last_service).base() / EconomyTime::DAYS_IN_ECONOMY_MONTH;
+					SetDParam(1, STR_VEHICLE_DETAILS_LAST_SERVICE_MINUTES_AGO);
+					SetDParam(2, minutes_since_serviced);
+					DrawString(tr.left, tr.right, CenterBounds(r.top, r.bottom, GetCharacterHeight(FS_NORMAL)),
+						v->ServiceIntervalIsPercent() ? STR_VEHICLE_DETAILS_SERVICING_INTERVAL_PERCENT : STR_VEHICLE_DETAILS_SERVICING_INTERVAL_MINUTES);
+					break;
+				}
+
+				/* We're using calendar dates. Show the date of last service. */
+				SetDParam(1, STR_VEHICLE_DETAILS_LAST_SERVICE_DATE);
+				SetDParam(2, v->date_of_last_service);
+				DrawString(tr.left, tr.right, CenterBounds(r.top, r.bottom, GetCharacterHeight(FS_NORMAL)),
 						v->ServiceIntervalIsPercent() ? STR_VEHICLE_DETAILS_SERVICING_INTERVAL_PERCENT : STR_VEHICLE_DETAILS_SERVICING_INTERVAL_DAYS);
 				break;
+			}
 		}
 	}
 
@@ -2362,43 +2759,51 @@ struct VehicleDetailsWindow : Window {
 		const Vehicle *v = Vehicle::Get(this->window_number);
 
 		if (v->type == VEH_TRAIN) {
-			this->DisableWidget(this->tab + WID_VD_DETAILS_CARGO_CARRIED);
+			this->LowerWidget(WID_VD_DETAILS_CARGO_CARRIED + this->tab);
 			this->vscroll->SetCount(GetTrainDetailsWndVScroll(v->index, this->tab));
 		}
 
 		/* Disable service-scroller when interval is set to disabled */
 		this->SetWidgetsDisabledState(!IsVehicleServiceIntervalEnabled(v->type, v->owner),
 			WID_VD_INCREASE_SERVICING_INTERVAL,
-			WID_VD_DECREASE_SERVICING_INTERVAL,
-			WIDGET_LIST_END);
+			WID_VD_DECREASE_SERVICING_INTERVAL);
 
-		StringID str = v->ServiceIntervalIsCustom() ?
-			(v->ServiceIntervalIsPercent() ? STR_VEHICLE_DETAILS_PERCENT : STR_VEHICLE_DETAILS_DAYS) :
-			STR_VEHICLE_DETAILS_DEFAULT;
-		this->GetWidget<NWidgetCore>(WID_VD_SERVICE_INTERVAL_DROPDOWN)->widget_data = str;
+		StringID str =
+			!v->ServiceIntervalIsCustom() ? STR_VEHICLE_DETAILS_DEFAULT :
+			v->ServiceIntervalIsPercent() ? STR_VEHICLE_DETAILS_PERCENT :
+			TimerGameEconomy::UsingWallclockUnits() ? STR_VEHICLE_DETAILS_MINUTES : STR_VEHICLE_DETAILS_DAYS;
+		this->GetWidget<NWidgetCore>(WID_VD_SERVICE_INTERVAL_DROPDOWN)->SetString(str);
+		this->SetWidgetDisabledState(WID_VD_SERVICE_INTERVAL_DROPDOWN, v->owner != _local_company);
 
 		this->DrawWidgets();
 	}
 
-	void OnClick(Point pt, int widget, int click_count) override
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
 	{
 		switch (widget) {
 			case WID_VD_INCREASE_SERVICING_INTERVAL:   // increase int
 			case WID_VD_DECREASE_SERVICING_INTERVAL: { // decrease int
-				int mod = _ctrl_pressed ? 5 : 10;
 				const Vehicle *v = Vehicle::Get(this->window_number);
+				int mod;
+				if (!v->ServiceIntervalIsPercent() && TimerGameEconomy::UsingWallclockUnits()) {
+					mod = _ctrl_pressed ? 1 : 5;
+				} else {
+					mod = _ctrl_pressed ? 5 : 10;
+				}
 
 				mod = (widget == WID_VD_DECREASE_SERVICING_INTERVAL) ? -mod : mod;
 				mod = GetServiceIntervalClamped(mod + v->GetServiceInterval(), v->ServiceIntervalIsPercent());
 				if (mod == v->GetServiceInterval()) return;
 
-				DoCommandP(v->tile, v->index, mod | (1 << 16) | (v->ServiceIntervalIsPercent() << 17), CMD_CHANGE_SERVICE_INT | CMD_MSG(STR_ERROR_CAN_T_CHANGE_SERVICING));
+				Command<CMD_CHANGE_SERVICE_INT>::Post(STR_ERROR_CAN_T_CHANGE_SERVICING, v->index, mod, true, v->ServiceIntervalIsPercent());
 				break;
 			}
 
 			case WID_VD_SERVICE_INTERVAL_DROPDOWN: {
 				const Vehicle *v = Vehicle::Get(this->window_number);
-				ShowDropDownMenu(this, _service_interval_dropdown, v->ServiceIntervalIsCustom() ? (v->ServiceIntervalIsPercent() ? 2 : 1) : 0, widget, 0, 0);
+				ShowDropDownMenu(this,
+					TimerGameEconomy::UsingWallclockUnits() ? _service_interval_dropdown_wallclock : _service_interval_dropdown_calendar,
+					v->ServiceIntervalIsCustom() ? (v->ServiceIntervalIsPercent() ? 2 : 1) : 0, widget, 0, 0);
 				break;
 			}
 
@@ -2406,13 +2811,11 @@ struct VehicleDetailsWindow : Window {
 			case WID_VD_DETAILS_TRAIN_VEHICLES:
 			case WID_VD_DETAILS_CAPACITY_OF_EACH:
 			case WID_VD_DETAILS_TOTAL_CARGO:
-				this->SetWidgetsDisabledState(false,
+				this->SetWidgetsLoweredState(false,
 					WID_VD_DETAILS_CARGO_CARRIED,
 					WID_VD_DETAILS_TRAIN_VEHICLES,
 					WID_VD_DETAILS_CAPACITY_OF_EACH,
-					WID_VD_DETAILS_TOTAL_CARGO,
-					widget,
-					WIDGET_LIST_END);
+					WID_VD_DETAILS_TOTAL_CARGO);
 
 				this->tab = (TrainDetailsWindowTabs)(widget - WID_VD_DETAILS_CARGO_CARRIED);
 				this->SetDirty();
@@ -2420,15 +2823,34 @@ struct VehicleDetailsWindow : Window {
 		}
 	}
 
-	void OnDropdownSelect(int widget, int index) override
+	bool OnTooltip([[maybe_unused]] Point pt, WidgetID widget, TooltipCloseCondition close_cond) override
+	{
+		if (widget == WID_VD_INCREASE_SERVICING_INTERVAL || widget == WID_VD_DECREASE_SERVICING_INTERVAL) {
+			const Vehicle *v = Vehicle::Get(this->window_number);
+			StringID tool_tip;
+			if (v->ServiceIntervalIsPercent()) {
+				tool_tip = widget == WID_VD_INCREASE_SERVICING_INTERVAL ? STR_VEHICLE_DETAILS_INCREASE_SERVICING_INTERVAL_TOOLTIP_PERCENT : STR_VEHICLE_DETAILS_DECREASE_SERVICING_INTERVAL_TOOLTIP_PERCENT;
+			} else if (TimerGameEconomy::UsingWallclockUnits()) {
+				tool_tip = widget == WID_VD_INCREASE_SERVICING_INTERVAL ? STR_VEHICLE_DETAILS_INCREASE_SERVICING_INTERVAL_TOOLTIP_MINUTES : STR_VEHICLE_DETAILS_DECREASE_SERVICING_INTERVAL_TOOLTIP_MINUTES;
+			} else {
+				tool_tip = widget == WID_VD_INCREASE_SERVICING_INTERVAL ? STR_VEHICLE_DETAILS_INCREASE_SERVICING_INTERVAL_TOOLTIP_DAYS : STR_VEHICLE_DETAILS_DECREASE_SERVICING_INTERVAL_TOOLTIP_DAYS;
+			}
+			GuiShowTooltips(this, tool_tip, close_cond);
+			return true;
+		}
+
+		return false;
+	}
+
+	void OnDropdownSelect(WidgetID widget, int index) override
 	{
 		switch (widget) {
 			case WID_VD_SERVICE_INTERVAL_DROPDOWN: {
 				const Vehicle *v = Vehicle::Get(this->window_number);
 				bool iscustom = index != 0;
 				bool ispercent = iscustom ? (index == 2) : Company::Get(v->owner)->settings.vehicle.servint_ispercent;
-				uint16 interval = GetServiceIntervalClamped(v->GetServiceInterval(), ispercent);
-				DoCommandP(v->tile, v->index, interval | (iscustom << 16) | (ispercent << 17), CMD_CHANGE_SERVICE_INT | CMD_MSG(STR_ERROR_CAN_T_CHANGE_SERVICING));
+				uint16_t interval = GetServiceIntervalClamped(v->GetServiceInterval(), ispercent);
+				Command<CMD_CHANGE_SERVICE_INT>::Post(STR_ERROR_CAN_T_CHANGE_SERVICING, v->index, interval, iscustom, ispercent);
 				break;
 			}
 		}
@@ -2447,16 +2869,16 @@ struct VehicleDetailsWindow : Window {
 static WindowDesc _train_vehicle_details_desc(
 	WDP_AUTO, "view_vehicle_details_train", 405, 178,
 	WC_VEHICLE_DETAILS, WC_VEHICLE_VIEW,
-	0,
-	_nested_train_vehicle_details_widgets, lengthof(_nested_train_vehicle_details_widgets)
+	{},
+	_nested_train_vehicle_details_widgets
 );
 
 /** Vehicle details window descriptor for other vehicles than a train. */
 static WindowDesc _nontrain_vehicle_details_desc(
 	WDP_AUTO, "view_vehicle_details", 405, 113,
 	WC_VEHICLE_DETAILS, WC_VEHICLE_VIEW,
-	0,
-	_nested_nontrain_vehicle_details_widgets, lengthof(_nested_nontrain_vehicle_details_widgets)
+	{},
+	_nested_nontrain_vehicle_details_widgets
 );
 
 /** Shows the vehicle details window of the given vehicle. */
@@ -2464,19 +2886,19 @@ static void ShowVehicleDetailsWindow(const Vehicle *v)
 {
 	CloseWindowById(WC_VEHICLE_ORDERS, v->index, false);
 	CloseWindowById(WC_VEHICLE_TIMETABLE, v->index, false);
-	AllocateWindowDescFront<VehicleDetailsWindow>((v->type == VEH_TRAIN) ? &_train_vehicle_details_desc : &_nontrain_vehicle_details_desc, v->index);
+	AllocateWindowDescFront<VehicleDetailsWindow>((v->type == VEH_TRAIN) ? _train_vehicle_details_desc : _nontrain_vehicle_details_desc, v->index);
 }
 
 
 /* Unified vehicle GUI - Vehicle View Window */
 
 /** Vehicle view widgets. */
-static const NWidgetPart _nested_vehicle_view_widgets[] = {
+static constexpr NWidgetPart _nested_vehicle_view_widgets[] = {
 	NWidget(NWID_HORIZONTAL),
 		NWidget(WWT_CLOSEBOX, COLOUR_GREY),
-		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_RENAME), SetMinimalSize(12, 14), SetDataTip(SPR_RENAME, STR_NULL /* filled in later */),
-		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VV_CAPTION), SetDataTip(STR_VEHICLE_VIEW_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
-		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_LOCATION), SetMinimalSize(12, 14), SetDataTip(SPR_GOTO_LOCATION, STR_NULL /* filled in later */),
+		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_RENAME), SetAspect(WidgetDimensions::ASPECT_RENAME), SetSpriteTip(SPR_RENAME),
+		NWidget(WWT_CAPTION, COLOUR_GREY, WID_VV_CAPTION), SetStringTip(STR_VEHICLE_VIEW_CAPTION, STR_TOOLTIP_WINDOW_TITLE_DRAG_THIS),
+		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_LOCATION), SetAspect(WidgetDimensions::ASPECT_LOCATION), SetSpriteTip(SPR_GOTO_LOCATION),
 		NWidget(WWT_DEBUGBOX, COLOUR_GREY),
 		NWidget(WWT_SHADEBOX, COLOUR_GREY),
 		NWidget(WWT_DEFSIZEBOX, COLOUR_GREY),
@@ -2490,48 +2912,28 @@ static const NWidgetPart _nested_vehicle_view_widgets[] = {
 		EndContainer(),
 		NWidget(NWID_VERTICAL),
 			NWidget(NWID_SELECTION, INVALID_COLOUR, WID_VV_SELECT_DEPOT_CLONE),
-				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_GOTO_DEPOT), SetMinimalSize(18, 18), SetDataTip(0x0 /* filled later */, 0x0 /* filled later */),
-				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_CLONE), SetMinimalSize(18, 18), SetDataTip(0x0 /* filled later */, 0x0 /* filled later */),
+				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_GOTO_DEPOT), SetMinimalSize(18, 18), SetSpriteTip(SPR_EMPTY /* filled later */),
+				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_CLONE), SetMinimalSize(18, 18), SetSpriteTip(SPR_EMPTY /* filled later */),
 			EndContainer(),
 			/* For trains only, 'ignore signal' button. */
 			NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_FORCE_PROCEED), SetMinimalSize(18, 18),
-											SetDataTip(SPR_IGNORE_SIGNALS, STR_VEHICLE_VIEW_TRAIN_IGNORE_SIGNAL_TOOLTIP),
+											SetSpriteTip(SPR_IGNORE_SIGNALS, STR_VEHICLE_VIEW_TRAIN_IGNORE_SIGNAL_TOOLTIP),
 			NWidget(NWID_SELECTION, INVALID_COLOUR, WID_VV_SELECT_REFIT_TURN),
-				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_REFIT), SetMinimalSize(18, 18), SetDataTip(SPR_REFIT_VEHICLE, 0x0 /* filled later */),
+				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_REFIT), SetMinimalSize(18, 18), SetSpriteTip(SPR_REFIT_VEHICLE),
 				NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_TURN_AROUND), SetMinimalSize(18, 18),
-												SetDataTip(SPR_FORCE_VEHICLE_TURN, STR_VEHICLE_VIEW_ROAD_VEHICLE_REVERSE_TOOLTIP),
+												SetSpriteTip(SPR_FORCE_VEHICLE_TURN, STR_VEHICLE_VIEW_ROAD_VEHICLE_REVERSE_TOOLTIP),
 			EndContainer(),
-			NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_SHOW_ORDERS), SetMinimalSize(18, 18), SetDataTip(SPR_SHOW_ORDERS, 0x0 /* filled later */),
-			NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_SHOW_DETAILS), SetMinimalSize(18, 18), SetDataTip(SPR_SHOW_VEHICLE_DETAILS, 0x0 /* filled later */),
+			NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_SHOW_ORDERS), SetMinimalSize(18, 18), SetSpriteTip(SPR_SHOW_ORDERS),
+			NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_SHOW_DETAILS), SetMinimalSize(18, 18), SetSpriteTip(SPR_SHOW_VEHICLE_DETAILS),
 			NWidget(WWT_PANEL, COLOUR_GREY), SetMinimalSize(18, 0), SetResize(0, 1), EndContainer(),
 		EndContainer(),
 	EndContainer(),
 	NWidget(NWID_HORIZONTAL),
-		NWidget(WWT_PUSHBTN, COLOUR_GREY, WID_VV_START_STOP), SetMinimalTextLines(1, WD_FRAMERECT_TOP + WD_FRAMERECT_BOTTOM + 2), SetResize(1, 0), SetFill(1, 0),
-		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_ORDER_LOCATION), SetMinimalSize(12, 14), SetDataTip(SPR_GOTO_LOCATION, STR_VEHICLE_VIEW_ORDER_LOCATION_TOOLTIP),
+		NWidget(WWT_PUSHBTN, COLOUR_GREY, WID_VV_START_STOP), SetResize(1, 0), SetFill(1, 0),
+		NWidget(WWT_PUSHIMGBTN, COLOUR_GREY, WID_VV_ORDER_LOCATION), SetAspect(WidgetDimensions::ASPECT_LOCATION), SetSpriteTip(SPR_GOTO_LOCATION, STR_VEHICLE_VIEW_ORDER_LOCATION_TOOLTIP),
 		NWidget(WWT_RESIZEBOX, COLOUR_GREY),
 	EndContainer(),
 };
-
-/** Vehicle view window descriptor for all vehicles but trains. */
-static WindowDesc _vehicle_view_desc(
-	WDP_AUTO, "view_vehicle", 250, 116,
-	WC_VEHICLE_VIEW, WC_NONE,
-	0,
-	_nested_vehicle_view_widgets, lengthof(_nested_vehicle_view_widgets)
-);
-
-/**
- * Vehicle view window descriptor for trains. Only minimum_height and
- *  default_height are different for train view.
- */
-static WindowDesc _train_view_desc(
-	WDP_AUTO, "view_vehicle_train", 250, 134,
-	WC_VEHICLE_VIEW, WC_NONE,
-	0,
-	_nested_vehicle_view_widgets, lengthof(_nested_vehicle_view_widgets)
-);
-
 
 /* Just to make sure, nobody has changed the vehicle type constants, as we are
 	 using them for array indexing in a number of places here. */
@@ -2554,51 +2956,49 @@ static const int VV_INITIAL_VIEWPORT_HEIGHT = 84;
 static const int VV_INITIAL_VIEWPORT_HEIGHT_TRAIN = 102;
 
 /** Command indices for the _vehicle_command_translation_table. */
-enum VehicleCommandTranslation {
+enum VehicleCommandTranslation : uint8_t {
 	VCT_CMD_START_STOP = 0,
 	VCT_CMD_CLONE_VEH,
 	VCT_CMD_TURN_AROUND,
 };
 
 /** Command codes for the shared buttons indexed by VehicleCommandTranslation and vehicle type. */
-static const uint32 _vehicle_command_translation_table[][4] = {
+static const StringID _vehicle_msg_translation_table[][4] = {
 	{ // VCT_CMD_START_STOP
-		CMD_START_STOP_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_STOP_START_TRAIN),
-		CMD_START_STOP_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_STOP_START_ROAD_VEHICLE),
-		CMD_START_STOP_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_STOP_START_SHIP),
-		CMD_START_STOP_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_STOP_START_AIRCRAFT)
+		STR_ERROR_CAN_T_STOP_START_TRAIN,
+		STR_ERROR_CAN_T_STOP_START_ROAD_VEHICLE,
+		STR_ERROR_CAN_T_STOP_START_SHIP,
+		STR_ERROR_CAN_T_STOP_START_AIRCRAFT
 	},
 	{ // VCT_CMD_CLONE_VEH
-		CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_TRAIN),
-		CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_ROAD_VEHICLE),
-		CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_SHIP),
-		CMD_CLONE_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_BUY_AIRCRAFT)
+		STR_ERROR_CAN_T_BUY_TRAIN,
+		STR_ERROR_CAN_T_BUY_ROAD_VEHICLE,
+		STR_ERROR_CAN_T_BUY_SHIP,
+		STR_ERROR_CAN_T_BUY_AIRCRAFT
 	},
 	{ // VCT_CMD_TURN_AROUND
-		CMD_REVERSE_TRAIN_DIRECTION | CMD_MSG(STR_ERROR_CAN_T_REVERSE_DIRECTION_TRAIN),
-		CMD_TURN_ROADVEH            | CMD_MSG(STR_ERROR_CAN_T_MAKE_ROAD_VEHICLE_TURN),
-		0xffffffff, // invalid for ships
-		0xffffffff  // invalid for aircraft
+		STR_ERROR_CAN_T_REVERSE_DIRECTION_TRAIN,
+		STR_ERROR_CAN_T_MAKE_ROAD_VEHICLE_TURN,
+		INVALID_STRING_ID, // invalid for ships
+		INVALID_STRING_ID  // invalid for aircraft
 	},
 };
 
 /**
  * This is the Callback method after attempting to start/stop a vehicle
  * @param result the result of the start/stop command
- * @param tile unused
- * @param p1 vehicle ID
- * @param p2 unused
+ * @param veh_id Vehicle ID.
  */
-void CcStartStopVehicle(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd)
+void CcStartStopVehicle(Commands, const CommandCost &result, VehicleID veh_id, bool)
 {
 	if (result.Failed()) return;
 
-	const Vehicle *v = Vehicle::GetIfValid(p1);
+	const Vehicle *v = Vehicle::GetIfValid(veh_id);
 	if (v == nullptr || !v->IsPrimaryVehicle() || v->owner != _local_company) return;
 
 	StringID msg = (v->vehstatus & VS_STOPPED) ? STR_VEHICLE_COMMAND_STOPPED : STR_VEHICLE_COMMAND_STARTED;
 	Point pt = RemapCoords(v->x_pos, v->y_pos, v->z_pos);
-	AddTextEffect(msg, pt.x, pt.y, DAY_TICKS, TE_RISING);
+	AddTextEffect(msg, pt.x, pt.y, Ticks::DAY_TICKS, TE_RISING);
 }
 
 /**
@@ -2609,7 +3009,7 @@ void CcStartStopVehicle(const CommandCost &result, TileIndex tile, uint32 p1, ui
 void StartStopVehicle(const Vehicle *v, bool texteffect)
 {
 	assert(v->IsPrimaryVehicle());
-	DoCommandP(v->tile, v->index, 0, _vehicle_command_translation_table[VCT_CMD_START_STOP][v->type], texteffect ? CcStartStopVehicle : nullptr);
+	Command<CMD_START_STOP_VEHICLE>::Post(_vehicle_msg_translation_table[VCT_CMD_START_STOP][v->type], texteffect ? CcStartStopVehicle : nullptr, v->tile, v->index, false);
 }
 
 /** Checks whether the vehicle may be refitted at the moment.*/
@@ -2628,7 +3028,7 @@ static bool IsVehicleRefitable(const Vehicle *v)
 struct VehicleViewWindow : Window {
 private:
 	/** Display planes available in the vehicle view window. */
-	enum PlaneSelections {
+	enum PlaneSelections : uint8_t {
 		SEL_DC_GOTO_DEPOT,  ///< Display 'goto depot' button in #WID_VV_SELECT_DEPOT_CLONE stacked widget.
 		SEL_DC_CLONE,       ///< Display 'clone vehicle' button in #WID_VV_SELECT_DEPOT_CLONE stacked widget.
 
@@ -2663,9 +3063,9 @@ private:
 	}
 
 public:
-	VehicleViewWindow(WindowDesc *desc, WindowNumber window_number) : Window(desc)
+	VehicleViewWindow(WindowDesc &desc, WindowNumber window_number) : Window(desc)
 	{
-		this->flags |= WF_DISABLE_VP_SCROLL;
+		this->flags.Set(WindowFlag::DisableVpScroll);
 		this->CreateNestedTree();
 
 		/* Sprites for the 'send to depot' button indexed by vehicle type. */
@@ -2676,7 +3076,7 @@ public:
 			SPR_SEND_AIRCRAFT_TODEPOT,
 		};
 		const Vehicle *v = Vehicle::Get(window_number);
-		this->GetWidget<NWidgetCore>(WID_VV_GOTO_DEPOT)->widget_data = vehicle_view_goto_depot_sprites[v->type];
+		this->GetWidget<NWidgetCore>(WID_VV_GOTO_DEPOT)->SetSprite(vehicle_view_goto_depot_sprites[v->type]);
 
 		/* Sprites for the 'clone vehicle' button indexed by vehicle type. */
 		static const SpriteID vehicle_view_clone_sprites[] = {
@@ -2685,11 +3085,11 @@ public:
 			SPR_CLONE_SHIP,
 			SPR_CLONE_AIRCRAFT,
 		};
-		this->GetWidget<NWidgetCore>(WID_VV_CLONE)->widget_data = vehicle_view_clone_sprites[v->type];
+		this->GetWidget<NWidgetCore>(WID_VV_CLONE)->SetSprite(vehicle_view_clone_sprites[v->type]);
 
 		switch (v->type) {
 			case VEH_TRAIN:
-				this->GetWidget<NWidgetCore>(WID_VV_TURN_AROUND)->tool_tip = STR_VEHICLE_VIEW_TRAIN_REVERSE_TOOLTIP;
+				this->GetWidget<NWidgetCore>(WID_VV_TURN_AROUND)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_REVERSE_TOOLTIP);
 				break;
 
 			case VEH_ROAD:
@@ -2704,21 +3104,21 @@ public:
 		}
 		this->FinishInitNested(window_number);
 		this->owner = v->owner;
-		this->GetWidget<NWidgetViewport>(WID_VV_VIEWPORT)->InitializeViewport(this, this->window_number | (1 << 31), _vehicle_view_zoom_levels[v->type]);
+		this->GetWidget<NWidgetViewport>(WID_VV_VIEWPORT)->InitializeViewport(this, static_cast<VehicleID>(this->window_number), ScaleZoomGUI(_vehicle_view_zoom_levels[v->type]));
 
-		this->GetWidget<NWidgetCore>(WID_VV_START_STOP)->tool_tip       = STR_VEHICLE_VIEW_TRAIN_STATUS_START_STOP_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_RENAME)->tool_tip           = STR_VEHICLE_DETAILS_TRAIN_RENAME + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_LOCATION)->tool_tip         = STR_VEHICLE_VIEW_TRAIN_CENTER_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_REFIT)->tool_tip            = STR_VEHICLE_VIEW_TRAIN_REFIT_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_GOTO_DEPOT)->tool_tip       = STR_VEHICLE_VIEW_TRAIN_SEND_TO_DEPOT_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_SHOW_ORDERS)->tool_tip      = STR_VEHICLE_VIEW_TRAIN_ORDERS_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_SHOW_DETAILS)->tool_tip     = STR_VEHICLE_VIEW_TRAIN_SHOW_DETAILS_TOOLTIP + v->type;
-		this->GetWidget<NWidgetCore>(WID_VV_CLONE)->tool_tip            = STR_VEHICLE_VIEW_CLONE_TRAIN_INFO + v->type;
+		this->GetWidget<NWidgetCore>(WID_VV_START_STOP)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_STATUS_START_STOP_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_RENAME)->SetToolTip(STR_VEHICLE_DETAILS_TRAIN_RENAME + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_LOCATION)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_CENTER_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_REFIT)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_REFIT_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_GOTO_DEPOT)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_SEND_TO_DEPOT_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_SHOW_ORDERS)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_ORDERS_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_SHOW_DETAILS)->SetToolTip(STR_VEHICLE_VIEW_TRAIN_SHOW_DETAILS_TOOLTIP + v->type);
+		this->GetWidget<NWidgetCore>(WID_VV_CLONE)->SetToolTip(STR_VEHICLE_VIEW_CLONE_TRAIN_INFO + v->type);
 
 		this->UpdateButtonStatus();
 	}
 
-	void Close() override
+	void Close([[maybe_unused]] int data = 0) override
 	{
 		CloseWindowById(WC_VEHICLE_ORDERS, this->window_number, false);
 		CloseWindowById(WC_VEHICLE_REFIT, this->window_number, false);
@@ -2727,24 +3127,24 @@ public:
 		this->Window::Close();
 	}
 
-	void UpdateWidgetSize(int widget, Dimension *size, const Dimension &padding, Dimension *fill, Dimension *resize) override
+	void UpdateWidgetSize(WidgetID widget, Dimension &size, [[maybe_unused]] const Dimension &padding, [[maybe_unused]] Dimension &fill, [[maybe_unused]] Dimension &resize) override
 	{
 		const Vehicle *v = Vehicle::Get(this->window_number);
 		switch (widget) {
 			case WID_VV_START_STOP:
-				size->height = std::max(size->height, std::max(GetSpriteSize(SPR_FLAG_VEH_STOPPED).height, GetSpriteSize(SPR_FLAG_VEH_RUNNING).height) + WD_IMGBTN_TOP + WD_IMGBTN_BOTTOM);
+				size.height = std::max<uint>({size.height, (uint)GetCharacterHeight(FS_NORMAL), GetScaledSpriteSize(SPR_WARNING_SIGN).height, GetScaledSpriteSize(SPR_FLAG_VEH_STOPPED).height, GetScaledSpriteSize(SPR_FLAG_VEH_RUNNING).height}) + padding.height;
 				break;
 
 			case WID_VV_FORCE_PROCEED:
 				if (v->type != VEH_TRAIN) {
-					size->height = 0;
-					size->width = 0;
+					size.height = 0;
+					size.width = 0;
 				}
 				break;
 
 			case WID_VV_VIEWPORT:
-				size->width = VV_INITIAL_VIEWPORT_WIDTH;
-				size->height = (v->type == VEH_TRAIN) ? VV_INITIAL_VIEWPORT_HEIGHT_TRAIN : VV_INITIAL_VIEWPORT_HEIGHT;
+				size.width = VV_INITIAL_VIEWPORT_WIDTH;
+				size.height = (v->type == VEH_TRAIN) ? VV_INITIAL_VIEWPORT_HEIGHT_TRAIN : VV_INITIAL_VIEWPORT_HEIGHT;
 				break;
 		}
 	}
@@ -2763,15 +3163,23 @@ public:
 		if (v->type == VEH_TRAIN) {
 			this->SetWidgetLoweredState(WID_VV_FORCE_PROCEED, Train::From(v)->force_proceed == TFP_SIGNAL);
 			this->SetWidgetDisabledState(WID_VV_FORCE_PROCEED, !is_localcompany);
+		}
+
+		if (v->type == VEH_TRAIN || v->type == VEH_ROAD) {
 			this->SetWidgetDisabledState(WID_VV_TURN_AROUND, !is_localcompany);
 		}
 
 		this->SetWidgetDisabledState(WID_VV_ORDER_LOCATION, v->current_order.GetLocation(v) == INVALID_TILE);
 
+		const Window *mainwindow = GetMainWindow();
+		if (mainwindow->viewport->follow_vehicle == v->index) {
+			this->LowerWidget(WID_VV_LOCATION);
+		}
+
 		this->DrawWidgets();
 	}
 
-	void SetStringParameters(int widget) const override
+	void SetStringParameters(WidgetID widget) const override
 	{
 		if (widget != WID_VV_CAPTION) return;
 
@@ -2779,11 +3187,11 @@ public:
 		SetDParam(0, v->index);
 	}
 
-	void DrawWidget(const Rect &r, int widget) const override
+	void DrawWidget(const Rect &r, WidgetID widget) const override
 	{
 		if (widget != WID_VV_START_STOP) return;
 
-		const Vehicle *v = Vehicle::Get(this->window_number);
+		Vehicle *v = Vehicle::Get(this->window_number);
 		StringID str;
 		TextColour text_colour = TC_FROMSTRING;
 		if (v->vehstatus & VS_CRASHED) {
@@ -2799,12 +3207,14 @@ public:
 						str = STR_VEHICLE_STATUS_STOPPED;
 					}
 				} else {
-					SetDParam(0, v->GetDisplaySpeed());
+					SetDParam(0, PackVelocity(v->GetDisplaySpeed(), v->type));
 					str = STR_VEHICLE_STATUS_TRAIN_STOPPING_VEL;
 				}
 			} else { // no train
 				str = STR_VEHICLE_STATUS_STOPPED;
 			}
+		} else if (v->IsInDepot() && v->IsWaitingForUnbunching()) {
+			str = STR_VEHICLE_STATUS_WAITING_UNBUNCHING;
 		} else if (v->type == VEH_TRAIN && HasBit(Train::From(v)->flags, VRF_TRAIN_STUCK) && !v->current_order.IsType(OT_LOADING)) {
 			str = STR_VEHICLE_STATUS_TRAIN_STUCK;
 		} else if (v->type == VEH_AIRCRAFT && HasBit(Aircraft::From(v)->flags, VAF_DEST_TOO_FAR) && !v->current_order.IsType(OT_LOADING)) {
@@ -2820,16 +3230,16 @@ public:
 			switch (v->current_order.GetType()) {
 				case OT_GOTO_STATION: {
 					SetDParam(0, v->current_order.GetDestination());
-					SetDParam(1, v->GetDisplaySpeed());
-					str = STR_VEHICLE_STATUS_HEADING_FOR_STATION_VEL;
+					SetDParam(1, PackVelocity(v->GetDisplaySpeed(), v->type));
+					str = HasBit(v->vehicle_flags, VF_PATHFINDER_LOST) ? STR_VEHICLE_STATUS_CANNOT_REACH_STATION_VEL : STR_VEHICLE_STATUS_HEADING_FOR_STATION_VEL;
 					break;
 				}
 
 				case OT_GOTO_DEPOT: {
 					SetDParam(0, v->type);
 					SetDParam(1, v->current_order.GetDestination());
-					SetDParam(2, v->GetDisplaySpeed());
-					if (v->current_order.GetDepotActionType() & ODATFB_NEAREST_DEPOT) {
+					SetDParam(2, PackVelocity(v->GetDisplaySpeed(), v->type));
+					if (v->current_order.GetDestination() == INVALID_DEPOT) {
 						/* This case *only* happens when multiple nearest depot orders
 						 * follow each other (including an order list only one order: a
 						 * nearest depot order) and there are no reachable depots.
@@ -2838,9 +3248,11 @@ public:
 						 * evaluating the string in the status bar. */
 						str = STR_EMPTY;
 					} else if (v->current_order.GetDepotActionType() & ODATFB_HALT) {
-						str = STR_VEHICLE_STATUS_HEADING_FOR_DEPOT_VEL;
+						str = HasBit(v->vehicle_flags, VF_PATHFINDER_LOST) ? STR_VEHICLE_STATUS_CANNOT_REACH_DEPOT_VEL : STR_VEHICLE_STATUS_HEADING_FOR_DEPOT_VEL;
+					} else if (v->current_order.GetDepotActionType() & ODATFB_UNBUNCH) {
+						str = HasBit(v->vehicle_flags, VF_PATHFINDER_LOST) ? STR_VEHICLE_STATUS_CANNOT_REACH_DEPOT_SERVICE_VEL : STR_VEHICLE_STATUS_HEADING_FOR_DEPOT_UNBUNCH_VEL;
 					} else {
-						str = STR_VEHICLE_STATUS_HEADING_FOR_DEPOT_SERVICE_VEL;
+						str = HasBit(v->vehicle_flags, VF_PATHFINDER_LOST) ? STR_VEHICLE_STATUS_CANNOT_REACH_DEPOT_SERVICE_VEL : STR_VEHICLE_STATUS_HEADING_FOR_DEPOT_SERVICE_VEL;
 					}
 					break;
 				}
@@ -2850,10 +3262,10 @@ public:
 					break;
 
 				case OT_GOTO_WAYPOINT: {
-					assert(v->type == VEH_TRAIN || v->type == VEH_SHIP);
+					assert(v->type == VEH_TRAIN || v->type == VEH_ROAD || v->type == VEH_SHIP);
 					SetDParam(0, v->current_order.GetDestination());
-					str = STR_VEHICLE_STATUS_HEADING_FOR_WAYPOINT_VEL;
-					SetDParam(1, v->GetDisplaySpeed());
+					str = HasBit(v->vehicle_flags, VF_PATHFINDER_LOST) ? STR_VEHICLE_STATUS_CANNOT_REACH_WAYPOINT_VEL : STR_VEHICLE_STATUS_HEADING_FOR_WAYPOINT_VEL;
+					SetDParam(1, PackVelocity(v->GetDisplaySpeed(), v->type));
 					break;
 				}
 
@@ -2862,11 +3274,11 @@ public:
 						str = STR_VEHICLE_STATUS_LEAVING;
 						break;
 					}
-					FALLTHROUGH;
+					[[fallthrough]];
 				default:
 					if (v->GetNumManualOrders() == 0) {
 						str = STR_VEHICLE_STATUS_NO_ORDERS_VEL;
-						SetDParam(0, v->GetDisplaySpeed());
+						SetDParam(0, PackVelocity(v->GetDisplaySpeed(), v->type));
 					} else {
 						str = STR_EMPTY;
 					}
@@ -2876,20 +3288,15 @@ public:
 
 		/* Draw the flag plus orders. */
 		bool rtl = (_current_text_dir == TD_RTL);
-		uint text_offset = std::max(GetSpriteSize(SPR_FLAG_VEH_STOPPED).width, GetSpriteSize(SPR_FLAG_VEH_RUNNING).width) + WD_IMGBTN_LEFT + WD_IMGBTN_RIGHT;
-		int height = r.bottom - r.top;
-		int text_left = r.left + (rtl ? (uint)WD_FRAMERECT_LEFT : text_offset);
-		int text_right = r.right - (rtl ? text_offset : (uint)WD_FRAMERECT_RIGHT);
-		int text_top = r.top + WD_FRAMERECT_TOP + (height - WD_FRAMERECT_TOP - WD_FRAMERECT_BOTTOM - FONT_HEIGHT_NORMAL) / 2;
-		int image = ((v->vehstatus & VS_STOPPED) != 0) ? SPR_FLAG_VEH_STOPPED : SPR_FLAG_VEH_RUNNING;
-		int image_left = (rtl ? text_right + 1 : r.left) + WD_IMGBTN_LEFT;
-		int image_top = r.top + WD_IMGBTN_TOP + (height - WD_IMGBTN_TOP + WD_IMGBTN_BOTTOM - GetSpriteSize(image).height) / 2;
-		int lowered = this->IsWidgetLowered(WID_VV_START_STOP) ? 1 : 0;
-		DrawSprite(image, PAL_NONE, image_left + lowered, image_top + lowered);
-		DrawString(text_left + lowered, text_right + lowered, text_top + lowered, str, text_colour, SA_HOR_CENTER);
+		uint icon_width = std::max({GetScaledSpriteSize(SPR_WARNING_SIGN).width, GetScaledSpriteSize(SPR_FLAG_VEH_STOPPED).width, GetScaledSpriteSize(SPR_FLAG_VEH_RUNNING).width});
+		Rect tr = r.Shrink(WidgetDimensions::scaled.framerect);
+		SpriteID image = ((v->vehstatus & VS_STOPPED) != 0) ? SPR_FLAG_VEH_STOPPED : (HasBit(v->vehicle_flags, VF_PATHFINDER_LOST)) ? SPR_WARNING_SIGN : SPR_FLAG_VEH_RUNNING;
+		DrawSpriteIgnorePadding(image, PAL_NONE, tr.WithWidth(icon_width, rtl), SA_CENTER);
+		tr = tr.Indent(icon_width + WidgetDimensions::scaled.imgbtn.Horizontal(), rtl);
+		DrawString(tr.left, tr.right, CenterBounds(tr.top, tr.bottom, GetCharacterHeight(FS_NORMAL)), str, text_colour, SA_HOR_CENTER);
 	}
 
-	void OnClick(Point pt, int widget, int click_count) override
+	void OnClick([[maybe_unused]] Point pt, WidgetID widget, [[maybe_unused]] int click_count) override
 	{
 		const Vehicle *v = Vehicle::Get(this->window_number);
 
@@ -2922,18 +3329,19 @@ public:
 				if (_ctrl_pressed) {
 					ShowExtraViewportWindow(TileVirtXY(v->x_pos, v->y_pos));
 				} else {
-					const Window *mainwindow = FindWindowById(WC_MAIN_WINDOW, 0);
-					if (click_count > 1 && mainwindow->viewport->zoom <= ZOOM_LVL_OUT_4X) {
+					const Window *mainwindow = GetMainWindow();
+					if (click_count > 1) {
 						/* main window 'follows' vehicle */
 						mainwindow->viewport->follow_vehicle = v->index;
 					} else {
+						if (mainwindow->viewport->follow_vehicle == v->index) mainwindow->viewport->follow_vehicle = INVALID_VEHICLE;
 						ScrollMainWindowTo(v->x_pos, v->y_pos, v->z_pos);
 					}
 				}
 				break;
 
 			case WID_VV_GOTO_DEPOT: // goto hangar
-				DoCommandP(v->tile, v->index | (_ctrl_pressed ? DEPOT_SERVICE : 0U), 0, GetCmdSendToDepot(v));
+				Command<CMD_SEND_VEHICLE_TO_DEPOT>::Post(GetCmdSendToDepotMsg(v), v->index, _ctrl_pressed ? DepotCommandFlag::Service : DepotCommandFlags{}, {});
 				break;
 			case WID_VV_REFIT: // refit
 				ShowVehicleRefitWindow(v, INVALID_VEH_ORDER_ID, this);
@@ -2957,35 +3365,59 @@ public:
 				 * There is no point to it except for starting the vehicle.
 				 * For starting the vehicle the player has to open the depot GUI, which is
 				 * most likely already open, but is also visible in the vehicle viewport. */
-				DoCommandP(v->tile, v->index, _ctrl_pressed ? 1 : 0,
-										_vehicle_command_translation_table[VCT_CMD_CLONE_VEH][v->type],
-										_ctrl_pressed ? nullptr : CcCloneVehicle);
+				Command<CMD_CLONE_VEHICLE>::Post(_vehicle_msg_translation_table[VCT_CMD_CLONE_VEH][v->type],
+										_ctrl_pressed ? nullptr : CcCloneVehicle,
+										v->tile, v->index, _ctrl_pressed);
 				break;
 			case WID_VV_TURN_AROUND: // turn around
 				assert(v->IsGroundVehicle());
-				DoCommandP(v->tile, v->index, 0,
-										_vehicle_command_translation_table[VCT_CMD_TURN_AROUND][v->type]);
+				if (v->type == VEH_ROAD) {
+					Command<CMD_TURN_ROADVEH>::Post(_vehicle_msg_translation_table[VCT_CMD_TURN_AROUND][v->type], v->tile, v->index);
+				} else {
+					Command<CMD_REVERSE_TRAIN_DIRECTION>::Post(_vehicle_msg_translation_table[VCT_CMD_TURN_AROUND][v->type], v->tile, v->index, false);
+				}
 				break;
 			case WID_VV_FORCE_PROCEED: // force proceed
 				assert(v->type == VEH_TRAIN);
-				DoCommandP(v->tile, v->index, 0, CMD_FORCE_TRAIN_PROCEED | CMD_MSG(STR_ERROR_CAN_T_MAKE_TRAIN_PASS_SIGNAL));
+				Command<CMD_FORCE_TRAIN_PROCEED>::Post(STR_ERROR_CAN_T_MAKE_TRAIN_PASS_SIGNAL, v->tile, v->index);
 				break;
 		}
 	}
 
-	void OnQueryTextFinished(char *str) override
+	EventState OnHotkey(int hotkey) override
 	{
-		if (str == nullptr) return;
-
-		DoCommandP(0, this->window_number, 0, CMD_RENAME_VEHICLE | CMD_MSG(STR_ERROR_CAN_T_RENAME_TRAIN + Vehicle::Get(this->window_number)->type), nullptr, str);
+		/* If the hotkey is not for any widget in the UI (i.e. for honking) */
+		if (hotkey == WID_VV_HONK_HORN) {
+			const Window *mainwindow = GetMainWindow();
+			const Vehicle *v = Vehicle::Get(window_number);
+			/* Only play the sound if we're following this vehicle */
+			if (mainwindow->viewport->follow_vehicle == v->index) {
+				v->PlayLeaveStationSound(true);
+			}
+		}
+		return Window::OnHotkey(hotkey);
 	}
 
-	void OnMouseOver(Point pt, int widget) override
+	void OnQueryTextFinished(std::optional<std::string> str) override
+	{
+		if (!str.has_value()) return;
+
+		Command<CMD_RENAME_VEHICLE>::Post(STR_ERROR_CAN_T_RENAME_TRAIN + Vehicle::Get(this->window_number)->type, this->window_number, *str);
+	}
+
+	void OnMouseOver([[maybe_unused]] Point pt, WidgetID widget) override
 	{
 		bool start_stop = widget == WID_VV_START_STOP;
 		if (start_stop != mouse_over_start_stop) {
 			mouse_over_start_stop = start_stop;
 			this->SetWidgetDirty(WID_VV_START_STOP);
+		}
+	}
+
+	void OnMouseWheel(int wheel) override
+	{
+		if (_settings_client.gui.scrollwheel_scrolling != SWS_OFF) {
+			DoZoomInOutWindow(wheel < 0 ? ZOOM_IN : ZOOM_OUT, this);
 		}
 	}
 
@@ -3013,8 +3445,8 @@ public:
 		}
 		/* The same system applies to widget WID_VV_REFIT_VEH and VVW_WIDGET_TURN_AROUND.*/
 		if (v->IsGroundVehicle()) {
-			PlaneSelections plane = veh_stopped ? SEL_RT_REFIT : SEL_RT_TURN_AROUND;
-			NWidgetStacked *nwi = this->GetWidget<NWidgetStacked>(WID_VV_SELECT_REFIT_TURN);
+			plane = veh_stopped ? SEL_RT_REFIT : SEL_RT_TURN_AROUND;
+			nwi = this->GetWidget<NWidgetStacked>(WID_VV_SELECT_REFIT_TURN);
 			if (nwi->shown_plane + SEL_RT_BASEPLANE != plane) {
 				this->SelectPlane(plane);
 				this->SetWidgetDirty(WID_VV_SELECT_REFIT_TURN);
@@ -3027,7 +3459,7 @@ public:
 	 * @param data Information about the changed data.
 	 * @param gui_scope Whether the call is done from GUI scope. You may not do everything when not in GUI scope. See #InvalidateWindowData() for details.
 	 */
-	void OnInvalidateData(int data = 0, bool gui_scope = true) override
+	void OnInvalidateData([[maybe_unused]] int data = 0, [[maybe_unused]] bool gui_scope = true) override
 	{
 		if (data == VIWD_AUTOREPLACE) {
 			/* Autoreplace replaced the vehicle.
@@ -3047,13 +3479,37 @@ public:
 	{
 		::ShowNewGRFInspectWindow(GetGrfSpecFeature(Vehicle::Get(this->window_number)->type), this->window_number);
 	}
+
+	static inline HotkeyList hotkeys{"vehicleview", {
+		Hotkey('H', "honk", WID_VV_HONK_HORN),
+	}};
 };
 
+/** Vehicle view window descriptor for all vehicles but trains. */
+static WindowDesc _vehicle_view_desc(
+	WDP_AUTO, "view_vehicle", 250, 116,
+	WC_VEHICLE_VIEW, WC_NONE,
+	{},
+	_nested_vehicle_view_widgets,
+	&VehicleViewWindow::hotkeys
+);
+
+/**
+ * Vehicle view window descriptor for trains. Only minimum_height and
+ *  default_height are different for train view.
+ */
+static WindowDesc _train_view_desc(
+	WDP_AUTO, "view_vehicle_train", 250, 134,
+	WC_VEHICLE_VIEW, WC_NONE,
+	{},
+	_nested_vehicle_view_widgets,
+	&VehicleViewWindow::hotkeys
+);
 
 /** Shows the vehicle view window of the given vehicle. */
 void ShowVehicleViewWindow(const Vehicle *v)
 {
-	AllocateWindowDescFront<VehicleViewWindow>((v->type == VEH_TRAIN) ? &_train_view_desc : &_vehicle_view_desc, v->index);
+	AllocateWindowDescFront<VehicleViewWindow>((v->type == VEH_TRAIN) ? _train_view_desc : _vehicle_view_desc, v->index);
 }
 
 /**
@@ -3072,10 +3528,37 @@ bool VehicleClicked(const Vehicle *v)
 	return _thd.GetCallbackWnd()->OnVehicleSelect(v);
 }
 
+/**
+ * Dispatch a "vehicle group selected" event if any window waits for it.
+ * @param begin iterator to the start of the range of vehicles
+ * @param end iterator to the end of the range of vehicles
+ * @return did any window accept vehicle group selection?
+ */
+bool VehicleClicked(VehicleList::const_iterator begin, VehicleList::const_iterator end)
+{
+	assert(begin != end);
+	if (!(_thd.place_mode & HT_VEHICLE)) return false;
+
+	/* If there is only one vehicle in the group, act as if we clicked a single vehicle */
+	if (begin + 1 == end) return _thd.GetCallbackWnd()->OnVehicleSelect(*begin);
+
+	return _thd.GetCallbackWnd()->OnVehicleSelect(begin, end);
+}
+
+/**
+ * Dispatch a "vehicle group selected" event if any window waits for it.
+ * @param vehgroup the GUIVehicleGroup representing the vehicle group
+ * @return did any window accept vehicle group selection?
+ */
+bool VehicleClicked(const GUIVehicleGroup &vehgroup)
+{
+	return VehicleClicked(vehgroup.vehicles_begin, vehgroup.vehicles_end);
+}
+
 void StopGlobalFollowVehicle(const Vehicle *v)
 {
-	Window *w = FindWindowById(WC_MAIN_WINDOW, 0);
-	if (w != nullptr && w->viewport->follow_vehicle == v->index) {
+	Window *w = GetMainWindow();
+	if (w->viewport->follow_vehicle == v->index) {
 		ScrollMainWindowTo(v->x_pos, v->y_pos, v->z_pos, true); // lock the main view on the vehicle's last position
 		w->viewport->follow_vehicle = INVALID_VEHICLE;
 	}
@@ -3085,16 +3568,13 @@ void StopGlobalFollowVehicle(const Vehicle *v)
 /**
  * This is the Callback method after the construction attempt of a primary vehicle
  * @param result indicates completion (or not) of the operation
- * @param tile unused
- * @param p1 unused
- * @param p2 unused
- * @param cmd unused
+ * @param new_veh_id ID of the new vehicle.
  */
-void CcBuildPrimaryVehicle(const CommandCost &result, TileIndex tile, uint32 p1, uint32 p2, uint32 cmd)
+void CcBuildPrimaryVehicle(Commands, const CommandCost &result, VehicleID new_veh_id, uint, uint16_t, CargoArray)
 {
 	if (result.Failed()) return;
 
-	const Vehicle *v = Vehicle::Get(_new_vehicle_id);
+	const Vehicle *v = Vehicle::Get(new_veh_id);
 	ShowVehicleViewWindow(v);
 }
 
@@ -3118,7 +3598,7 @@ int GetSingleVehicleWidth(const Vehicle *v, EngineImageType image_type)
 			v->GetImage(rtl ? DIR_E : DIR_W, image_type, &seq);
 			Rect rec;
 			seq.GetBounds(&rec);
-			return UnScaleGUI(rec.right - rec.left + 1);
+			return UnScaleGUI(rec.Width());
 	}
 }
 
@@ -3149,33 +3629,50 @@ void SetMouseCursorVehicle(const Vehicle *v, EngineImageType image_type)
 {
 	bool rtl = _current_text_dir == TD_RTL;
 
-	_cursor.sprite_count = 0;
+	_cursor.sprites.clear();
 	int total_width = 0;
-	for (; v != nullptr; v = v->HasArticulatedPart() ? v->GetNextArticulatedPart() : nullptr) {
-		if (total_width >= ScaleGUITrad(2 * (int)VEHICLEINFO_FULL_VEHICLE_WIDTH)) break;
+	int y_offset = 0;
+	bool rotor_seq = false; // Whether to draw the rotor of the vehicle in this step.
+	bool is_ground_vehicle = v->IsGroundVehicle();
+
+	while (v != nullptr) {
+		if (total_width >= ScaleSpriteTrad(2 * (int)VEHICLEINFO_FULL_VEHICLE_WIDTH)) break;
 
 		PaletteID pal = (v->vehstatus & VS_CRASHED) ? PALETTE_CRASH : GetVehiclePalette(v);
 		VehicleSpriteSeq seq;
-		v->GetImage(rtl ? DIR_E : DIR_W, image_type, &seq);
 
-		if (_cursor.sprite_count + seq.count > lengthof(_cursor.sprite_seq)) break;
+		if (rotor_seq) {
+			GetCustomRotorSprite(Aircraft::From(v), image_type, &seq);
+			if (!seq.IsValid()) seq.Set(SPR_ROTOR_STOPPED);
+			y_offset = -ScaleSpriteTrad(5);
+		} else {
+			v->GetImage(rtl ? DIR_E : DIR_W, image_type, &seq);
+		}
+
+		int x_offs = 0;
+		if (v->type == VEH_TRAIN) x_offs = Train::From(v)->GetCursorImageOffset();
 
 		for (uint i = 0; i < seq.count; ++i) {
 			PaletteID pal2 = (v->vehstatus & VS_CRASHED) || !seq.seq[i].pal ? pal : seq.seq[i].pal;
-			_cursor.sprite_seq[_cursor.sprite_count].sprite = seq.seq[i].sprite;
-			_cursor.sprite_seq[_cursor.sprite_count].pal = pal2;
-			_cursor.sprite_pos[_cursor.sprite_count].x = rtl ? -total_width : total_width;
-			_cursor.sprite_pos[_cursor.sprite_count].y = 0;
-			_cursor.sprite_count++;
+			_cursor.sprites.emplace_back(seq.seq[i].sprite, pal2, rtl ? (-total_width + x_offs) : (total_width + x_offs), y_offset);
 		}
 
-		total_width += GetSingleVehicleWidth(v, image_type);
+		if (v->type == VEH_AIRCRAFT && v->subtype == AIR_HELICOPTER && !rotor_seq) {
+			/* Draw rotor part in the next step. */
+			rotor_seq = true;
+		} else {
+			total_width += GetSingleVehicleWidth(v, image_type);
+			v = v->HasArticulatedPart() ? v->GetNextArticulatedPart() : nullptr;
+		}
 	}
 
-	int offs = (ScaleGUITrad(VEHICLEINFO_FULL_VEHICLE_WIDTH) - total_width) / 2;
-	if (rtl) offs = -offs;
-	for (uint i = 0; i < _cursor.sprite_count; ++i) {
-		_cursor.sprite_pos[i].x += offs;
+	if (is_ground_vehicle) {
+		/* Center trains and road vehicles on the front vehicle */
+		int offs = (ScaleSpriteTrad(VEHICLEINFO_FULL_VEHICLE_WIDTH) - total_width) / 2;
+		if (rtl) offs = -offs;
+		for (auto &cs : _cursor.sprites) {
+			cs.pos.x += offs;
+		}
 	}
 
 	UpdateCursorSize();

@@ -13,12 +13,12 @@
 #include "core/enum_type.hpp"
 
 /** The type all our vehicle IDs have. */
-typedef uint32 VehicleID;
+typedef uint32_t VehicleID;
 
 static const int GROUND_ACCELERATION = 9800; ///< Acceleration due to gravity, 9.8 m/s^2
 
 /** Available vehicle types. It needs to be 8bits, because we save and load it as such */
-enum VehicleType : byte {
+enum VehicleType : uint8_t {
 	VEH_BEGIN,
 
 	VEH_TRAIN = VEH_BEGIN,        ///< %Train vehicle type.
@@ -34,9 +34,8 @@ enum VehicleType : byte {
 	VEH_END,
 	VEH_INVALID = 0xFF,           ///< Non-existing type of vehicle.
 };
-DECLARE_POSTFIX_INCREMENT(VehicleType)
-/** Helper information for extract tool. */
-template <> struct EnumPropsT<VehicleType> : MakeEnumPropsT<VehicleType, byte, VEH_TRAIN, VEH_END, VEH_INVALID, 3> {};
+DECLARE_INCREMENT_DECREMENT_OPERATORS(VehicleType)
+DECLARE_ENUM_AS_ADDABLE(VehicleType)
 
 struct Vehicle;
 struct Train;
@@ -54,21 +53,14 @@ struct BaseVehicle
 
 static const VehicleID INVALID_VEHICLE = 0xFFFFF; ///< Constant representing a non-existing vehicle.
 
-/** Pathfinding option states */
-enum VehiclePathFinders {
-	// Original PathFinder (OPF) used to be 0
-	VPF_NPF  = 1, ///< New PathFinder
-	VPF_YAPF = 2, ///< Yet Another PathFinder
+/** Flags for goto depot commands. */
+enum class DepotCommandFlag : uint8_t {
+	Service, ///< The vehicle will leave the depot right after arrival (service only)
+	MassSend, ///< Tells that it's a mass send to depot command (type in VLW flag)
+	DontCancel, ///< Don't cancel current goto depot command if any
+	LocateHangar, ///< Find another airport if the target one lacks a hangar
 };
-
-/** Flags to add to p1 for goto depot commands. */
-enum DepotCommand {
-	DEPOT_SERVICE       = (1U << 28), ///< The vehicle will leave the depot right after arrival (service only)
-	DEPOT_MASS_SEND     = (1U << 29), ///< Tells that it's a mass send to depot command (type in VLW flag)
-	DEPOT_DONT_CANCEL   = (1U << 30), ///< Don't cancel current goto depot command if any
-	DEPOT_LOCATE_HANGAR = (1U << 31), ///< Find another airport if the target one lacks a hangar
-	DEPOT_COMMAND_MASK  = 0xFU << 28,
-};
+using DepotCommandFlags = EnumBitSet<DepotCommandFlag, uint8_t>;
 
 static const uint MAX_LENGTH_VEHICLE_NAME_CHARS = 32; ///< The maximum length of a vehicle name in characters including '\0'
 
@@ -76,13 +68,13 @@ static const uint MAX_LENGTH_VEHICLE_NAME_CHARS = 32; ///< The maximum length of
 static const uint VEHICLE_LENGTH = 8;
 
 /** Vehicle acceleration models. */
-enum AccelerationModel {
+enum AccelerationModel : uint8_t {
 	AM_ORIGINAL,
 	AM_REALISTIC,
 };
 
 /** Visualisation contexts of vehicles and engines. */
-enum EngineImageType {
+enum EngineImageType : uint8_t {
 	EIT_ON_MAP     = 0x00,  ///< Vehicle drawn in viewport.
 	EIT_IN_DEPOT   = 0x10,  ///< Vehicle drawn in depot.
 	EIT_IN_DETAILS = 0x11,  ///< Vehicle drawn in vehicle details, refit window, ...

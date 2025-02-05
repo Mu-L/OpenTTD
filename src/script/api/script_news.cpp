@@ -16,27 +16,29 @@
 #include "script_error.hpp"
 #include "../../command_type.h"
 #include "../../string_func.h"
+#include "../../news_cmd.h"
 
 #include "../../safeguards.h"
 
-/* static */ bool ScriptNews::Create(NewsType type, Text *text, ScriptCompany::CompanyID company, NewsReferenceType ref_type, uint32 reference)
+/* static */ bool ScriptNews::Create(NewsType type, Text *text, ScriptCompany::CompanyID company, NewsReferenceType ref_type, SQInteger reference)
 {
-	CCountedPtr<Text> counter(text);
+	ScriptObjectRef counter(text);
 
+	EnforceDeityMode(false);
 	EnforcePrecondition(false, text != nullptr);
-	const char *encoded = text->GetEncodedText();
+	std::string encoded = text->GetEncodedText();
 	EnforcePreconditionEncodedText(false, encoded);
 	EnforcePrecondition(false, type == NT_ECONOMY || type == NT_SUBSIDIES || type == NT_GENERAL);
 	EnforcePrecondition(false, company == ScriptCompany::COMPANY_INVALID || ScriptCompany::ResolveCompanyID(company) != ScriptCompany::COMPANY_INVALID);
 	EnforcePrecondition(false, (ref_type == NR_NONE) ||
-	                           (ref_type == NR_TILE     && ScriptMap::IsValidTile(reference)) ||
+	                           (ref_type == NR_TILE     && ScriptMap::IsValidTile(::TileIndex(reference))) ||
 	                           (ref_type == NR_STATION  && ScriptStation::IsValidStation(reference)) ||
 	                           (ref_type == NR_INDUSTRY && ScriptIndustry::IsValidIndustry(reference)) ||
 	                           (ref_type == NR_TOWN     && ScriptTown::IsValidTown(reference)));
 
-	uint8 c = company;
+	uint8_t c = company;
 	if (company == ScriptCompany::COMPANY_INVALID) c = INVALID_COMPANY;
 
 	if (ref_type == NR_NONE) reference = 0;
-	return ScriptObject::DoCommand(0, type | (ref_type << 8) | (c << 16), reference, CMD_CUSTOM_NEWS_ITEM, encoded);
+	return ScriptObject::Command<CMD_CUSTOM_NEWS_ITEM>::Do((::NewsType)type, (::NewsReferenceType)ref_type, (::CompanyID)c, reference, encoded);
 }
